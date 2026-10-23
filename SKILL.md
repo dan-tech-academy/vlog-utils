@@ -73,7 +73,7 @@ Helpers (`helpers/transcribe.py`, `helpers/render.py`, etc.) live alongside this
 
 Dan Tech renders read `brand/theme.json`. A session file `<edit>/theme.json` replaces that file wholesale. Do not deep-merge, and do not invent a second palette in prose.
 
-The committed colors are **placeholders** (`meta.placeholders` is true). They are not the final brand. The on-screen handle is `@dantech0xff`. Watermark and intro stay off until `brand/logo.png` exists and the theme turns them on.
+The committed colors are **placeholders** (`meta.placeholders` is true). They are not the final brand. The on-screen handle is `@dantech0xff`. Watermark and intro stay off until `brand/logo.png` exists and the theme turns them on. When they are on, include them in the strategy proposal instead of inventing a title card. `render.py` writes `edit/edl.resolved.json` with the intro and outro ranges it actually used. The watermark is an overlay under the subtitles, hidden on the intro and outro cards.
 
 Caption safe-zone margin is `captions.margin_v` (the code default is **90**, including the vertical-video UI). The worked `MarginV=35` example below is historical. Use the theme value. Fonts are the files named in the theme (Be Vietnam Pro and JetBrains Mono, both OFL). A missing font file aborts before ffmpeg.
 

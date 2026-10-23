@@ -1,0 +1,5 @@
+Drop a transparent PNG at brand/logo.png, about 1024 px on the long side.
+
+brand/theme.json keeps watermark.enabled and intro.enabled false until that file is present. The colors in the theme are placeholders, not the final Dan Tech palette. The on-screen handle is @dantech0xff.
+
+ffmpeg reads the PNG. An SVG next to it is welcome and is not what the renderer opens.

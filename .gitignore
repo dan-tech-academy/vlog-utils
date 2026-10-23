@@ -4,6 +4,13 @@
 *.pem
 *.key
 
+# Owner brand assets. The theme stays off until these exist.
+brand/logo.png
+brand/music/*.wav
+brand/music/*.mp3
+brand/music/*.flac
+brand/music/*.m4a
+
 # Python
 __pycache__/
 *.py[cod]

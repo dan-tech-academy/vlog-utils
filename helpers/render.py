@@ -711,65 +711,22 @@ def build_final_composite(
     edit_dir: Path,
     style_id: str = "bold-overlay",
     fontsdir: Path | None = None,
+    watermark: dict | None = None,
 ) -> None:
-    """Final pass: base → overlays (PTS-shifted) → subtitles LAST → out.
+    """Final pass: base → overlays (PTS-shifted) → watermark → subtitles LAST.
 
-    If there are no overlays and no subtitles, just copy base to out.
+    If there are no overlays, no watermark, and no subtitles, just copy base.
     """
-    has_overlays = bool(overlays)
-    has_subs = subtitles_path is not None and subtitles_path.exists()
-
-    if not has_overlays and not has_subs:
-        # Nothing to do — just rename/copy base to final name
+    graph = picture_filter_graph(
+        overlays, subtitles_path, edit_dir,
+        style_id=style_id, fontsdir=fontsdir, watermark=watermark,
+    )
+    if graph is None:
         run(["ffmpeg", "-y", "-i", str(base_path), "-c", "copy", str(out_path)], quiet=True)
         return
+    inputs, filter_complex, out_label = graph
 
-    inputs: list[str] = ["-i", str(base_path)]
-    for ov in overlays:
-        ov_path = resolve_path(ov["file"], edit_dir)
-        inputs += ["-i", str(ov_path)]
-
-    filter_parts: list[str] = []
-    # PTS-shift every overlay so its frame 0 lands at start_in_output
-    for idx, ov in enumerate(overlays, start=1):
-        t = float(ov["start_in_output"])
-        filter_parts.append(f"[{idx}:v]setpts=PTS-STARTPTS+{t}/TB[a{idx}]")
-
-    # Chain overlays on top of base
-    current = "[0:v]"
-    for idx, ov in enumerate(overlays, start=1):
-        t = float(ov["start_in_output"])
-        dur = float(ov["duration"])
-        end = t + dur
-        next_label = f"[v{idx}]"
-        filter_parts.append(
-            f"{current}[a{idx}]overlay=enable='between(t,{t:.3f},{end:.3f})'{next_label}"
-        )
-        current = next_label
-
-    # Subtitles LAST — Rule 1. ASS carries its own styles; force_style would override them.
-    if has_subs:
-        from captions import require_libass, subtitle_filter
-
-        require_libass()
-        if subtitles_path.suffix.lower() == ".ass":
-            clause = subtitle_filter(subtitles_path, fontsdir=fontsdir)
-        else:
-            clause = subtitle_filter(
-                subtitles_path, force_style=force_style_for(style_id)
-            )
-        filter_parts.append(f"{current}{clause}[outv]")
-        out_label = "[outv]"
-    else:
-        # Rename the last overlay output to [outv] for consistency
-        if has_overlays:
-            filter_parts.append(f"{current}null[outv]")
-            out_label = "[outv]"
-        else:
-            out_label = "[0:v]"
-
-    filter_complex = ";".join(filter_parts)
-
+    inputs = ["-i", str(base_path), *inputs]
     cmd = [
         "ffmpeg", "-y",
         *inputs,
@@ -783,8 +740,73 @@ def build_final_composite(
         str(out_path),
     ]
     print(f"compositing → {out_path.name}")
-    print(f"  overlays: {len(overlays)}, subtitles: {'yes' if has_subs else 'no'}")
+    print(
+        f"  overlays: {len(overlays)}, "
+        f"subtitles: {'yes' if subtitles_path is not None and subtitles_path.exists() else 'no'}"
+    )
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+
+def picture_filter_graph(
+    overlays: list[dict],
+    subtitles_path: Path | None,
+    edit_dir: Path,
+    *,
+    style_id: str = "bold-overlay",
+    fontsdir: Path | None = None,
+    watermark: dict | None = None,
+):
+    """Return ``(ffmpeg inputs, filtergraph, map label)`` or None when nothing composites."""
+    from brand import append_brand_filters
+
+    has_overlays = bool(overlays)
+    has_subs = subtitles_path is not None and subtitles_path.exists()
+    has_mark = bool(watermark and watermark.get("file"))
+    if not has_overlays and not has_subs and not has_mark:
+        return None
+
+    inputs: list[str] = []
+    for ov in overlays:
+        inputs += ["-i", str(resolve_path(ov["file"], edit_dir))]
+    filter_parts: list[str] = []
+    for idx, ov in enumerate(overlays, start=1):
+        t = float(ov["start_in_output"])
+        filter_parts.append(f"[{idx}:v]setpts=PTS-STARTPTS+{t}/TB[a{idx}]")
+    current = "[0:v]"
+    for idx, ov in enumerate(overlays, start=1):
+        t = float(ov["start_in_output"])
+        end = t + float(ov["duration"])
+        next_label = f"[v{idx}]"
+        filter_parts.append(
+            f"{current}[a{idx}]overlay=enable='between(t,{t:.3f},{end:.3f})'{next_label}"
+        )
+        current = next_label
+
+    subs_clause = None
+    if has_subs:
+        from captions import require_libass, subtitle_filter
+
+        require_libass()
+        if subtitles_path.suffix.lower() == ".ass":
+            subs_clause = subtitle_filter(subtitles_path, fontsdir=fontsdir)
+        else:
+            subs_clause = subtitle_filter(
+                subtitles_path, force_style=force_style_for(style_id)
+            )
+    mark_index = None
+    mark_xy = None
+    if has_mark:
+        mark_index = 1 + len(overlays)
+        inputs += ["-i", str(watermark["file"])]
+        mark_xy = (int(watermark.get("x", 0)), int(watermark.get("y", 0)))
+    out_label = append_brand_filters(
+        filter_parts,
+        current,
+        watermark_input=mark_index,
+        watermark_xy_px=mark_xy,
+        subs_clause=subs_clause,
+    )
+    return inputs, ";".join(filter_parts), out_label
 
 
 def mix_stems(picture: Path, out_path: Path, edl: dict, edit_dir: Path) -> list[str]:
@@ -834,6 +856,7 @@ def _finish_picture(
     fontsdir: Path | None,
     no_loudnorm: bool,
     draft: bool,
+    watermark: dict | None = None,
 ) -> None:
     from audio import should_mix
 
@@ -841,7 +864,7 @@ def _finish_picture(
         picture = out_path.with_suffix(".picture.mp4")
         build_final_composite(
             base_path, overlays, subs_path, picture, edit_dir,
-            style_id=style_id, fontsdir=fontsdir,
+            style_id=style_id, fontsdir=fontsdir, watermark=watermark,
         )
         if no_loudnorm:
             mix_stems(picture, out_path, edl, edit_dir)
@@ -858,13 +881,13 @@ def _finish_picture(
     if no_loudnorm:
         build_final_composite(
             base_path, overlays, subs_path, out_path, edit_dir,
-            style_id=style_id, fontsdir=fontsdir,
+            style_id=style_id, fontsdir=fontsdir, watermark=watermark,
         )
         return
     prenorm = out_path.with_suffix(".prenorm.mp4")
     build_final_composite(
         base_path, overlays, subs_path, prenorm, edit_dir,
-        style_id=style_id, fontsdir=fontsdir,
+        style_id=style_id, fontsdir=fontsdir, watermark=watermark,
     )
     print("loudness normalization → social-ready (-14 LUFS / -1 dBTP / LRA 11)")
     apply_loudnorm_two_pass(prenorm, out_path, preview=draft)
@@ -892,6 +915,19 @@ def render_edl(
             theme = load_theme(edit_dir)
         except ThemeError as exc:
             sys.exit(str(exc))
+    from brand import BrandError, materialize_cards, require_logo, watermark_xy
+
+    try:
+        require_logo(theme)
+    except BrandError as exc:
+        sys.exit(str(exc))
+    if (theme.intro or {}).get("enabled") or (theme.outro or {}).get("enabled"):
+        edl = materialize_cards(edl, theme, edit_dir)
+    else:
+        from brand import with_brand_ranges
+
+        edl = with_brand_ranges(edl, theme)
+    (edit_dir / "edl.resolved.json").write_text(json.dumps(edl, indent=2))
     style_id = resolve_caption_style(edl, theme)
     language = (
         (edl.get("captions") or {}).get("language")
@@ -928,10 +964,22 @@ def render_edl(
         elif edl.get("subtitles"):
             subs_path = resolve_subtitles_path(edl["subtitles"], edit_dir)
     overlays = list(edl.get("overlays") or [])
+    watermark = None
+    if (theme.watermark or {}).get("enabled"):
+        x, y = watermark_xy(
+            theme.frame_width,
+            theme.frame_height,
+            int(theme.watermark.get("width_px") or 160),
+            int(theme.watermark.get("margin_px") or 36),
+            theme.watermark.get("corner") or "top-right",
+        )
+        from brand import logo_path
+
+        watermark = {"file": str(logo_path(theme)), "x": x, "y": y}
     _finish_picture(
         edl, edit_dir, out_path, base_path, overlays, subs_path,
         style_id=style_id, fontsdir=fontsdir,
-        no_loudnorm=no_loudnorm, draft=draft,
+        no_loudnorm=no_loudnorm, draft=draft, watermark=watermark,
     )
 
 
