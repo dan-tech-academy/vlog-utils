@@ -1,11 +1,27 @@
 # Dan Tech brand and media upgrade
 
-Planning document only. No feature work is in this change.
+Implementation follows the locked decisions below. Earlier sections are the design. Where they disagree with the locked decisions, the locked decisions win.
 
 - Repo: `dan-tech-academy/video-use` (fork of browser-use/video-use)
 - Branch: `feat/dantech-brand-and-media-upgrade`
-- Date: 2026-10-23. Revised the same day after a Gemini and Vbee review (section 5.1, decisions 6.1 and 6.4). The TTS and STT defaults did not change.
+- Date: 2026-10-23. Owner locked the decisions the same day, then switched the TTS default from Gemini back to Azure before implementation.
 - Audience: Dan Tech (`@dantech0xff`, `@dantech-0xff`) and whoever implements the phases
+
+## Locked decisions
+
+| Topic | Decision |
+| --- | --- |
+| TTS default | Azure Speech standard neural (free tier). Word times come from the Speech SDK `synthesis_word_boundary` events. The default path does not run a second alignment pass. |
+| TTS fallback | edge-tts, for dev and offline use when `AZURE_SPEECH_KEY` is absent. It has its own word-boundary events. |
+| Gemini TTS | Not built. The provider interface stays open so a later adapter can be added. |
+| Transcription | ElevenLabs Scribe stays. Move `model_id` to `scribe_v2` when that id still returns the existing word fields (`type`, `text`, `start`, `end`, `speaker_id`, audio events). |
+| Secrets | `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, `ELEVENLABS_API_KEY`. No keys in the repo. |
+| Fonts | Bundle Be Vietnam Pro and JetBrains Mono (both OFL). |
+| SFX | Commit a small generated CC0 set with a license file. One clip per role. |
+| Music | `music.enabled` stays false until the owner supplies beds. |
+| Generated frame | 1920×1080 at 30 fps. Footage keeps source orientation and frame rate. |
+| Infographics | Pillow frames plus ffmpeg. Custom HyperFrames, Remotion, and Manim slots stay the escape hatch. |
+| Brand assets | Placeholder palette, channel name Dan Tech, on-screen handle `@dantech0xff`. Logo file and final colors wait on the owner. Watermark and intro stay off until a logo file is present. |
 
 This plan turns the existing conversation-driven editor into a channel pipeline that can still cut footage and can also generate narrated tech videos. Brand, caption variety, per-segment graphics, sound effects, music, and speech synthesis land in an order where each phase has something real to call.
 
@@ -164,7 +180,7 @@ These are existing production rules. Phases add behavior around them.
 
 **Tasks:**
 
-1. Add `brand/theme.schema.json` (JSON Schema) and `brand/theme.example.json`. Colors start as `null` until the brand-asset decision is filled in. Include channel name `Dan Tech` and both handles as strings, without guessing which handle belongs to which site.
+1. Add `brand/theme.schema.json` (JSON Schema), `brand/theme.json`, and `brand/theme.example.json`. Channel name is `Dan Tech`. Both handles are stored. The on-screen handle is `@dantech0xff`. Colors in the committed theme are labeled placeholders (`meta.placeholders: true`), not the final palette. Watermark and intro stay off.
 2. Add `helpers/theme.py` with `load_theme(edit_dir) -> Theme`. Search order: `<edit>/theme.json`, then `brand/theme.json` beside the repo, then the built-in example. Fail with a path and a missing key, not a silent default font.
 3. Resolve fonts to files on disk. A style that names a family also names a file. Missing file is an error that names the path.
 4. Teach `render.py` to load the theme and to resolve caption style from `edl["captions"]["style"]` or `theme.captions.default`. The first implementation may still emit today's `SUB_FORCE_STYLE` when the style id is `bold-overlay`, so current output stays stable.
@@ -237,7 +253,7 @@ These are existing production rules. Phases add behavior around them.
 
 **Effort:** L
 
-**Goal:** A provider interface whose default implementation is Azure Speech neural TTS. Output is a WAV plus a Scribe-shaped word list. Footage transcription stays on Scribe, behind a thin adapter of its own.
+**Goal:** A provider interface whose default implementation is Azure Speech standard neural TTS. Word times come from SDK word-boundary events. edge-tts is the dev fallback and uses its own boundary events. Output is a WAV plus a Scribe-shaped word list. Footage transcription stays on Scribe. Gemini is not implemented.
 
 **Why now:** Generated pictures need word times, and the mix needs a voice stem that is not glued to a camera file. SFX and music should be written against that stem and this interface, not against a one-off `ffmpeg -i narration.mp3` in a Manim note. Caption styles already exist, so the first TTS sample can be captioned immediately.
 
@@ -277,7 +293,7 @@ These are existing production rules. Phases add behavior around them.
     - Auth from `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION` in `.env`. Same "missing key" behavior as `load_api_key` in `transcribe.py`.
     - Prefer the Speech SDK (`azure-cognitiveservices-speech`) so `synthesis_word_boundary` arrives during a synchronous synth. Microsoft documents those events for Azure Speech voices, and documents that OpenAI voices on the same service do not emit them. Dragon HD Omni documents the payload (`text`, `audio_offset`, `text_offset`).
     - First task of the phase, before any caption wiring: synthesize a 10-second Vietnamese sample and a 10-second English sample, print the raw offset unit, and lock the seconds conversion in a test fixture checked into `tests/fixtures/`. Azure SDK offsets are 100-nanosecond ticks. Do not guess from a blog post if the probe disagrees.
-    - If `vi-VN-HoaiMyNeural` or `vi-VN-NamMinhNeural` omits boundaries, try `vi-VN-Linh:MAI-Voice-2-Flash`, then use the commercial snap alignment in section 5.1 for that voice only. Callers still receive seconds. Do not point this fallback at WhisperX's Vietnamese wav2vec2: those weights are CC BY-NC 4.0.
+    - If `vi-VN-HoaiMyNeural` or `vi-VN-NamMinhNeural` omits boundaries, try `vi-VN-Linh:MAI-Voice-2-Flash`, then fail with the voice id. Do not align the WAV with Scribe or with WhisperX. The default clock is the Azure boundary event.
     - Split text on sentence boundaries so each request stays under the real-time 10-minute output cap. Offset later chunks by the running duration. Cache each chunk under `<edit>/audio/tts/<sha256>.wav` plus `.words.json`, keyed by provider, voice, language, style, and text.
     - For mixed lines, allow SSML `<lang xml:lang="en-US">…</lang>` around English product tokens when the narration language is `vi`. The script format in phase 9 can mark those tokens; the adapter must not invent pronunciations.
 
@@ -297,7 +313,7 @@ These are existing production rules. Phases add behavior around them.
 
 - Default extra `tts`: `azure-cognitiveservices-speech`.
 - Dev extra `tts-edge`: `edge-tts`.
-- Not in the first implementation: `google-genai`, a Vbee client, Kokoro, Piper, Coqui, F5-TTS, OpenAI, WhisperX. Gemini TTS and Vbee return audio only. They become adapters only if decision 6.1 picks them, and each adapter must run the section 5.1 alignment before it returns `words`. The Azure path does not depend on that step if the probe shows boundaries.
+- Not in this implementation: `google-genai`, a Vbee client, Kokoro, Piper, Coqui, F5-TTS, OpenAI, WhisperX. A future audio-only provider must not return `words` until it has real timings. Section 5.1 describes one commercial way to get those timings. It is not part of the Azure or edge-tts path.
 
 **Acceptance:**
 
@@ -314,7 +330,7 @@ These are existing production rules. Phases add behavior around them.
 - Voice quality is a listening decision. The phase is done when the contract works, not when the voice is "the" Dan Tech voice. Leave the chosen id in `speech.json` after the owner listens.
 - Do not route TTS through `manim-voiceover`. That plugin is Manim-only and its examples default to ElevenLabs.
 
-**Gemini and Vbee, after the 2026-10-23 review.** The default for this phase stays Azure, with edge-tts as the dev fallback. Do not add a Gemini or Vbee adapter in the first implementation. Both can speak Vietnamese, and neither returns word boundaries (section 5.1). Shipping either one means the alignment step ships in the same change, because captions and the EDL consume `words`. Scribe stays the footage transcriber. `gemini-3.5-transcribe` is the hosted STT fallback in decision 6.4, not a replacement that this phase has to build.
+**Locked for this phase.** Ship Azure and edge-tts only. Azure is the publish provider. edge-tts runs when the Azure key is missing. Do not add a Gemini adapter. Do not run Scribe on the synthesized WAV. Scribe remains the footage transcriber, with `scribe_v2` when the word schema matches.
 
 ### Phase 4 — Audio timeline and mix foundation
 
@@ -814,11 +830,9 @@ Compared in section 5.1 with current vendor pages. The pipeline need that decide
 | H. OpenAI speech models | No word times. Current speech model ids shut down 2027-01-06. |
 | I. Kokoro, Piper, XTTS, F5-TTS | Unchanged from section 5. Official Kokoro has no Vietnamese. XTTS and F5 weights are non-commercial. |
 
-**Recommendation:** Default A. Dev fallback F, behind the same `synthesize()` interface, and only when no Azure key is present. Phase 3 ships A and F.
+**Locked:** A, with F as the dev fallback. Phase 3 ships those two providers and no others. Gemini stays a possible later adapter. It is not the default, and this implementation does not build it.
 
-If a 60-second listen prefers B or C, that provider can replace A only together with the section 5.1 snap alignment (`gemini-3.5-transcribe` word offsets, then a monotonic match back to the script). Do not ship the nicer voice first and leave captions on sentence guesses. WhisperX is not that alignment step for Vietnamese: the stock `vi` acoustic model is CC BY-NC 4.0.
-
-**Needs from you:** an Azure Speech key and region, or "use edge-tts until I have one". Optional: a Vbee app id and a Gemini API key on a billed project, so the listening test is real audio rather than a doc comparison. Listen to `vi-VN-HoaiMyNeural`, `vi-VN-NamMinhNeural`, one Vbee Northern voice, and one Gemini 3.8 Vietnamese-library voice on the same paragraph, including an English product name, before `speech.json` is treated as final.
+**Still needs a live check:** `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION` on a free-tier resource, then a short listen of `vi-VN-HoaiMyNeural` and `vi-VN-NamMinhNeural`. The code defaults to `vi-VN-NamMinhNeural` until that listen changes `brand/speech.json`.
 
 ### 6.2 Vietnamese, English, or both?
 
@@ -854,9 +868,9 @@ Section 5.1 has the full comparison. Short version: Gemini now has a real transc
 | C. Vbee STT | Vietnamese ASR exists. Realtime is WAV under 10 seconds. Batch is WAV under 100 MB and can take hours. Times are per utterance, not per word. No speaker field and no audio-event field in the documented JSON. No public per-minute price. Not a fallback for this EDL. |
 | D. WhisperX locally | Drops the key and needs a GPU. English word alignment can use the MIT wav2vec2 bundle. The Vietnamese aligner WhisperX selects is CC BY-NC 4.0, so a monetized Vietnamese edit would keep Whisper's looser times. No laughter channel, and the skill already rejects CPU Whisper because it normalizes fillers. Offline English fallback only. |
 
-**Recommendation:** Default A. Fallback B, as a second `transcribe()` adapter, built only if you want the ElevenLabs key gone. C does not feed cut points. D is not the Vietnamese footage path.
+**Locked:** A. Keep Scribe. Upgrade the request's `model_id` to `scribe_v2` when the response still has word-level `words`. Do not add Gemini Transcribe or Vbee STT in this implementation.
 
-TTS work does not require this change. A Gemini or Vbee *voice* still uses `gemini-3.5-transcribe` as a timer on its own WAV (section 5.1). That timer is not the footage transcriber, and it does not delete Scribe.
+The rejected Gemini-TTS plan would have timed synthesis by running Scribe on the WAV. That step is not part of the Azure path. Azure's own word-boundary events are the clock.
 
 ### 6.5 Music source and license
 
@@ -928,7 +942,7 @@ No other placement is worth a fork in the code. Per-video voice or language over
 
 1. You answer 6.1 (provider), 6.2 (language), and 6.7 (colors and logo, even roughly). The rest have recommendations that can ship as defaults.
 2. Phase 1, then 2. Footage captions can use the new styles before any TTS key exists.
-3. Phase 3 probe (the 10-second boundary dump) before the rest of phase 3. If the Vietnamese Azure voice does not emit boundaries, use the section 5.1 snap alignment. Do not use WhisperX's Vietnamese wav2vec2 for that fallback.
+3. Phase 3 probe (the 10-second boundary dump) once `AZURE_SPEECH_KEY` is available. If the Vietnamese voice emits no boundaries, try the other `vi-VN` neural voice, then `vi-VN-Linh:MAI-Voice-2-Flash`, then stop. Do not align with Scribe.
 4. Phases 4, then 5 and 6. Phase 5 and phase 6 can be split across two changes; 6 depends on 5's safe rect.
 5. Phases 7 and 8 after the asset decisions 6.5 and 6.6. The code can land with test tones earlier.
 6. Phase 9 last, then one real script rendered end to end and listened to. The self-eval numbers go into `project.md` for that session.
