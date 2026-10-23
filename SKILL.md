@@ -219,9 +219,11 @@ Hard rules: subtitles LAST (Rule 1), output-timeline offsets (Rule 5). Do not pa
 
 Animations match the content and the brand. **Get the palette, font, and visual language from the conversation** — never assume a default. If the user hasn't told you, propose a palette in the strategy phase and wait for confirmation before building anything.
 
-**Tool options:**
+**Default is the catalog.** `helpers/visuals/select.py` picks one of `kinetic`, `section`, `stat`, `list`, `comparison`, `code`, `question`, `quote` from the phrase. The same phrase picks the same id. A `custom` overlay is left alone. Use HyperFrames, Remotion, or Manim only for a diagram the catalog cannot draw (a state machine, an equation). Do not spawn a sub-agent per line.
 
-Pick the engine per animation slot. Do not default to Remotion just because the animation is web-adjacent.
+**Tool options for a custom slot:**
+
+Pick the engine per custom slot. Do not default to Remotion just because the animation is web-adjacent.
 
 - **HyperFrames** — Browser-native HTML/CSS/GSAP video compositions: product UI motion, website-to-video or mockup-to-video captures, kinetic typography, landing-page/storyboard promos, data-driven UI states, transparent WebM overlays, and clips that need deterministic frame capture plus HyperFrames lint/validate/render checks. Best when the animation should be authored and verified like a web composition instead of a React component tree.
 - **Remotion** — React/CSS compositions with component state, reusable React primitives, or an existing Remotion brand system. Best when the user specifically asks for React/Remotion or when React composition is the simpler authoring model.
