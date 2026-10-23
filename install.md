@@ -89,7 +89,7 @@ Figure out which agent you are running under, and register once. A symlink of th
     ln -sfn ~/Developer/video-use/skills/style-explainer "${CODEX_HOME:-$HOME/.codex}/skills/style-explainer"
     ```
 
-- **Hermes / Openclaw / another agent with a skills directory**: symlink `~/Developer/video-use` into that agent's skills directory under the name `video-use`. If the agent has no skills directory, add a line to its system prompt / config pointing at `~/Developer/video-use/SKILL.md` (e.g. an `@~/Developer/video-use/SKILL.md` import in a `CLAUDE.md`-equivalent).
+- **Hermes / Openclaw / another agent with a skills directory**: symlink `~/Developer/video-use` into that agent's skills directory under the name `video-use`, and symlink `~/Developer/video-use/skills/style-explainer` under the name `style-explainer`. If the agent has no skills directory, add a line to its system prompt / config pointing at `~/Developer/video-use/SKILL.md` (e.g. an `@~/Developer/video-use/SKILL.md` import in a `CLAUDE.md`-equivalent). Footage still follows `skills/style-explainer/SKILL.md`.
 
 If you can't tell which agent you're in, ask the user once: "which agent am I running under — Claude Code, Codex, or something else?" Then pick the right target.
 

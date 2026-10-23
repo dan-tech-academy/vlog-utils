@@ -7,8 +7,10 @@ is marked ``needs_transcript`` instead of being given a guessed role.
 
 from __future__ import annotations
 
+import argparse
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -253,3 +255,32 @@ def write_inventory(inventory: dict, edit_dir: Path) -> Path:
 
 def roles_present(inventory: dict) -> set[str]:
     return {entry["role"] for entry in inventory.get("files") or [] if entry.get("role")}
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Classify a footage folder into edit/inventory.json. Does not call Scribe.",
+    )
+    parser.add_argument("folder", type=Path)
+    parser.add_argument("--edit-dir", type=Path, required=True)
+    parser.add_argument(
+        "--transcripts",
+        type=Path,
+        help="JSON map of path relative to the folder -> {words: [...]}",
+    )
+    args = parser.parse_args(argv)
+    transcripts = json.loads(args.transcripts.read_text()) if args.transcripts else None
+    inventory = build_inventory(args.folder, transcripts=transcripts)
+    dest = write_inventory(inventory, args.edit_dir)
+    print(dest)
+    missing = [entry["path"] for entry in inventory["files"] if entry.get("needs_transcript")]
+    if missing:
+        print("needs_transcript: " + ", ".join(missing))
+    if "talking_head" not in roles_present(inventory) and not missing:
+        print("stop: no talking_head", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

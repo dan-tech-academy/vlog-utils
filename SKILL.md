@@ -82,7 +82,9 @@ Caption safe-zone margin is `captions.margin_v` (the code default is **90**, inc
 - **`transcribe.py <video>`** — single-file Scribe call. `--num-speakers N` optional. Cached.
 - **`transcribe_batch.py <videos_dir>`** — 4-worker parallel transcription. Use for multi-take.
 - **`pack_transcripts.py --edit-dir <dir>`** — `transcripts/*.json` → `takes_packed.md` (phrase-level, break on silence ≥ 0.5s).
-- **`timeline_view.py <video> <start> <end>`** — filmstrip + waveform PNG. On-demand visual drill-down. **Not a scan tool** — use it at decision points, not constantly.
+- **`inventory.py <folder> --edit-dir <edit>`** — classify a footage folder into `edit/inventory.json`. Does not call Scribe. Files that need a transcript are marked `needs_transcript`. Optional `--transcripts` is a JSON map of relative path to `{words: [...]}`.
+- **`check_visual_plan.py`** — guardrails for `style-explainer`. Run it before `render.py`. It does not pick a template.
+- **`timeline_view.py <video> <start> <end>`** — filmstrip + waveform PNG. On-demand visual drill-down. **Not a scan tool** — use it at decision points, not constantly. For a portrait delivery of a 16:9 camera, read the filmstrip and write a per-range `crop`. There is no face detector.
 - **`render.py <edl.json> -o <out>`** — per-segment extract → concat → overlays (PTS-shifted) → subtitles LAST. `--preview` for 720p fast. `--build-subtitles` writes `master.ass`.
 - **`speak.py --text-file script.txt --out edit/audio/voice.wav --words edit/audio/voice.words.json`** — Azure neural TTS. Word times are SDK word boundaries. If `AZURE_SPEECH_KEY` is missing, edge-tts is the dev fallback. Do not time a synthesized WAV with Scribe.
 - **`grade.py <in> -o <out>`** — ffmpeg filter chain grade. Presets + `--filter '<raw>'` for custom.
@@ -303,7 +305,7 @@ Sound is where generated videos sound cheap. Worked rules from launch edits:
 - **Hit on the frame.** Most effects have an attack (silence or a build before the transient). Measure it (first sample above ~-30 dBFS of the peak) and start the file `attack` seconds *before* the visible contact frame.
 - **Duck music under speech** by `duck_db` (default −13 dB, inside the −12 to −15 window) with an 80 ms attack and a 400 ms release, measured against the bed's own level in a silent gap. Ramp the bed so it is silent at the outro start.
 - **Master once:** mix to PCM, then two-pass loudnorm (-14 LUFS, true peak ≤ -1 dBTP) on the final mix. Then measure per section (see Self-eval).
-- **Music stays off until a bed exists.** `music.enabled` is false in the theme and in `brand/music/manifest.json`. Offer the beds listed there and wait for the owner to add a licensed instrumental file. Do not generate a bed. A bed with `vocals: true` is rejected. Do not claim the mix sounds good. Report the ebur128 numbers.
+- **Music.** `brand/theme.json` keeps `music.enabled` false, so a run that names no bed stays silent. `brand/music/manifest.json` holds four original CC0 instrumentals (`measured`, `curious`, `tense`, `light`) with mood, energy, BPM, length, and license. A footage edit follows `style-explainer`: a music file in the folder wins; otherwise the visual plan names one library id for the piece. A bed with `vocals: true` or an empty license is rejected. Do not generate a bed. Do not claim the mix sounds good. Report the ebur128 numbers.
 
 ## Output spec
 

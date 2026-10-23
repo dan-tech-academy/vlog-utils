@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT / "helpers"))
 
-from self_eval import decide, project_note  # noqa: E402
+from self_eval import decide, main, project_note  # noqa: E402
 
 
 class SelfEvalTests(unittest.TestCase):
@@ -33,6 +33,19 @@ class SelfEvalTests(unittest.TestCase):
         self.assertIn("eyes", note)
         self.assertIn("-14 LUFS", note)
         self.assertIn("preview", note)
+
+    def test_cli_appends_the_note(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            passes = folder / "passes.json"
+            passes.write_text('[{"failures": ["same"]}, {"failures": ["same"]}]')
+            project = folder / "project.md"
+            code = main(["--passes", str(passes), "--max-passes", "3", "--project", str(project)])
+            self.assertEqual(code, 0)
+            text = project.read_text()
+        self.assertIn("stop_no_progress", text)
+        self.assertIn("preview", text)
 
 
 if __name__ == "__main__":
