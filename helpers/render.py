@@ -102,10 +102,19 @@ def resolve_path(maybe_path: str, base: Path) -> Path:
 def resolve_caption_style(edl: dict, theme) -> str:
     """Style id from the EDL, otherwise the theme default.
 
-    An EDL with no caption fields stays on ``bold-overlay`` when that is the
-    theme default. An id outside the catalog is an error before ffmpeg runs.
+    An EDL with no caption fields stays on the theme default (``bold-overlay``
+    in the committed theme). Vietnamese narration with no explicit style uses
+    ``sentence``, because a 2-word English chunk splits syllables. An id
+    outside the catalog is an error before ffmpeg runs.
     """
-    requested = (edl.get("captions") or {}).get("style") or theme.captions_default
+    captions = edl.get("captions") or {}
+    requested = captions.get("style")
+    if not requested:
+        language = captions.get("language") or edl.get("language")
+        if language in ("vi", "vi-VN"):
+            requested = "sentence"
+        else:
+            requested = theme.captions_default
     if requested not in KNOWN_CAPTION_STYLES:
         raise SystemExit(f"unknown caption style '{requested}'")
     return requested
@@ -115,15 +124,18 @@ def force_style_for(style_id: str) -> str:
     """force_style string for an SRT burn.
 
     ``bold-overlay`` is the historical ``SUB_FORCE_STYLE`` string. Other
-    catalog styles are burned from an ASS file (see ``captions.py``) and do
-    not use this string.
+    styles prefer an ASS file. The strings below are only the SRT fallback.
     """
     if style_id == "bold-overlay":
         return SUB_FORCE_STYLE
     if style_id not in KNOWN_CAPTION_STYLES:
         raise SystemExit(f"unknown caption style '{style_id}'")
-    raise SystemExit(
-        f"caption style '{style_id}' is burned from ASS, not force_style"
+    family = "JetBrains Mono" if style_id == "terminal" else "Be Vietnam Pro"
+    return (
+        f"FontName={family},FontSize=22,Bold=0,"
+        "PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H00000000,"
+        "BorderStyle=1,Outline=2,Shadow=0,"
+        "Alignment=2,MarginV=90"
     )
 
 
@@ -697,6 +709,8 @@ def build_final_composite(
     subtitles_path: Path | None,
     out_path: Path,
     edit_dir: Path,
+    style_id: str = "bold-overlay",
+    fontsdir: Path | None = None,
 ) -> None:
     """Final pass: base → overlays (PTS-shifted) → subtitles LAST → out.
 
@@ -733,12 +747,18 @@ def build_final_composite(
         )
         current = next_label
 
-    # Subtitles LAST — Rule 1
+    # Subtitles LAST — Rule 1. ASS carries its own styles; force_style would override them.
     if has_subs:
-        subs_abs = str(subtitles_path.resolve()).replace(":", r"\:").replace("'", r"\'")
-        filter_parts.append(
-            f"{current}subtitles='{subs_abs}':force_style='{SUB_FORCE_STYLE}'[outv]"
-        )
+        from captions import require_libass, subtitle_filter
+
+        require_libass()
+        if subtitles_path.suffix.lower() == ".ass":
+            clause = subtitle_filter(subtitles_path, fontsdir=fontsdir)
+        else:
+            clause = subtitle_filter(
+                subtitles_path, force_style=force_style_for(style_id)
+            )
+        filter_parts.append(f"{current}{clause}[outv]")
         out_label = "[outv]"
     else:
         # Rename the last overlay output to [outv] for consistency
@@ -822,11 +842,12 @@ def main() -> None:
     except ThemeError as exc:
         sys.exit(str(exc))
     style_id = resolve_caption_style(edl, theme)
-    if style_id != "bold-overlay":
-        sys.exit(
-            f"caption style '{style_id}' is selected but this render still "
-            "burns bold-overlay. Use the ASS writer once it is wired."
-        )
+    language = (
+        (edl.get("captions") or {}).get("language")
+        or edl.get("language")
+        or "en"
+    )
+    fontsdir = theme.font("body").file.parent
     frame_mode = theme.frame_mode
     if edl.get("plate") or (edl.get("frame") or {}).get("mode") == "force":
         frame_mode = "force"
@@ -852,8 +873,15 @@ def main() -> None:
     subs_path: Path | None = None
     if not args.no_subtitles:
         if args.build_subtitles:
-            subs_path = edit_dir / "master.srt"
-            build_master_srt(edl, edit_dir, subs_path)
+            from captions import cues_for_edl, write_ass
+
+            subs_path = edit_dir / "master.ass"
+            write_ass(
+                cues_for_edl(edl, edit_dir, style_id, language),
+                subs_path,
+                theme,
+                style_id,
+            )
         elif edl.get("subtitles"):
             subs_path = resolve_subtitles_path(edl["subtitles"], edit_dir)
 
@@ -861,11 +889,17 @@ def main() -> None:
     overlays = edl.get("overlays") or []
     if args.no_loudnorm:
         # Composite directly to final output
-        build_final_composite(base_path, overlays, subs_path, out_path, edit_dir)
+        build_final_composite(
+            base_path, overlays, subs_path, out_path, edit_dir,
+            style_id=style_id, fontsdir=fontsdir,
+        )
     else:
         # Composite to a temp file, then run loudnorm → final output
         tmp_composite = out_path.with_suffix(".prenorm.mp4")
-        build_final_composite(base_path, overlays, subs_path, tmp_composite, edit_dir)
+        build_final_composite(
+            base_path, overlays, subs_path, tmp_composite, edit_dir,
+            style_id=style_id, fontsdir=fontsdir,
+        )
         print("loudness normalization → social-ready (-14 LUFS / -1 dBTP / LRA 11)")
         apply_loudnorm_two_pass(tmp_composite, out_path, preview=args.draft)
         tmp_composite.unlink(missing_ok=True)

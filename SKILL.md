@@ -202,9 +202,17 @@ BorderStyle=1,Outline=2,Shadow=0,
 Alignment=2,MarginV=35
 ```
 
-**`natural-sentence`** (if you invent this mode) — narrative, documentary, education. 4–7 word chunks, sentence case, break on natural pauses, `MarginV=60–80`, larger font for readability, slightly wider max-width. No shipped force_style — design one if you need it.
+Shipped styles live in `helpers/captions.py` and burn as ASS (`fontsdir` set, no `force_style`). An existing `.srt` still burns with `force_style`. `PlayRes` is the frame size, so `margin_v` is pixels.
 
-Invent a third style if neither fits. Hard rules: subtitles LAST (Rule 1), output-timeline offsets (Rule 5).
+| Id | When |
+| --- | --- |
+| `bold-overlay` | English footage default. 2–3 word uppercase chunks. |
+| `sentence` | Vietnamese default, and long-form. 12–18 syllables, or 4–7 English words. Case stays as spoken. |
+| `karaoke` | One phrase, `\kf` on the word times, active word in the accent color. |
+| `terminal` | Commands. JetBrains Mono on the theme surface. |
+| `emphasis` | A short window around one payoff word, drawn in the accent color. |
+
+Hard rules: subtitles LAST (Rule 1), output-timeline offsets (Rule 5). Do not pass `force_style` on an `.ass` file.
 
 ## Animations (when requested)
 
