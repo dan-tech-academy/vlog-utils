@@ -3,6 +3,7 @@ import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).parents[1]
@@ -90,6 +91,25 @@ class LayoutTests(unittest.TestCase):
         self.assertNotIn("force_style", pieces[-1])
         self.assertTrue(any("overlay=" in piece and "[wm]" in piece for piece in pieces))
         self.assertLess(graph.find("[wm]"), graph.rfind("subtitles="))
+
+    def test_composite_stops_at_the_base_duration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            edit = Path(tmp)
+            base = edit / "base.mp4"
+            base.write_bytes(b"x")
+            (edit / "card.mp4").write_bytes(b"x")
+            with patch.object(render, "_probe_duration", return_value=2.4), patch.object(
+                render.subprocess, "run"
+            ) as run:
+                render.build_final_composite(
+                    base,
+                    [{"file": "card.mp4", "start_in_output": 1.5, "duration": 3.0}],
+                    None,
+                    edit / "out.mp4",
+                    edit,
+                )
+        cmd = run.call_args.args[0]
+        self.assertEqual(cmd[cmd.index("-t") + 1], "2.400")
 
 
 if __name__ == "__main__":

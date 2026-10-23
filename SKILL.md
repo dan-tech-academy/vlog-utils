@@ -86,10 +86,13 @@ Caption safe-zone margin is `captions.margin_v` (the code default is **90**, inc
 - **`render.py <edl.json> -o <out>`** — per-segment extract → concat → overlays (PTS-shifted) → subtitles LAST. `--preview` for 720p fast. `--build-subtitles` writes `master.ass`.
 - **`speak.py --text-file script.txt --out edit/audio/voice.wav --words edit/audio/voice.words.json`** — Azure neural TTS. Word times are SDK word boundaries. If `AZURE_SPEECH_KEY` is missing, edge-tts is the dev fallback. Do not time a synthesized WAV with Scribe.
 - **`grade.py <in> -o <out>`** — ffmpeg filter chain grade. Presets + `--filter '<raw>'` for custom.
+- **`compile_script.py script.json --edit-dir <edit> --plan`** — narration path. Prints the voice, template ids, SFX kinds, and music id. No ffmpeg, no speech API. Drop `--plan` to synthesize, build the plate, and render. A folder of camera files stays on the inventory path. `compile_script.py` is only for a folder that has `script.json` and no camera media.
 
-For animations, create `<edit>/animations/slot_<id>/` with `Bash` and spawn a sub-agent via the `Agent` tool.
+For a custom animation slot, create `<edit>/animations/slot_<id>/` with `Bash` and spawn a sub-agent via the `Agent` tool. The catalog does not need a sub-agent.
 
 ## The process
+
+A folder of camera files stays on the inventory path. `compile_script.py` is only for a folder that has `script.json` and no camera media. Confirm language, voice id, template choices, bed id, and runtime before a new synthesis. A cache hit may render without asking again.
 
 1. **Inventory.** `ffprobe` every source. `transcribe_batch.py` on the directory. `pack_transcripts.py` to produce `takes_packed.md`. Sample one or two `timeline_view`s for a visual first impression.
 2. **Pre-scan for problems.** One pass over `takes_packed.md` to note verbal slips, obvious mis-speaks, or phrasings to avoid. Plain list, feed into the editor brief.
@@ -106,6 +109,8 @@ For animations, create `<edit>/animations/slot_<id>/` with `Bash` and spawn a su
    Also sample: first 2s, last 2s, and 2–3 mid-points — check grade consistency, subtitle readability, overall coherence. Run `ffprobe` on the output to verify duration matches the EDL expectation.
 
    Measure the audio, don't assume it: `ffmpeg -i out.mp4 -af ebur128=peak=true -f null -` for integrated loudness and true peak, plus RMS per section (dialogue, music-only, end card). An end card 15 dB under the dialogue, or effects louder than speech, is a bug. You cannot listen: say so, and report the numbers.
+
+   On a generated video, also sample a frame in the intro (only when the theme enables it), on a content beat, and on the outro. The watermark is present only where the theme enables it. Captions sit inside the safe band, and diacritics are drawn (a missing glyph looks like a box on the timeline PNG). Run `ebur128` on the voice stem, the music stem, and the full mix, for a voice section and a music-only section. Ducked music should sit about 12–15 dB under its dry level. An SFX stem whose peak exceeds the voice stem's peak is a bug. `ffprobe` duration matches `total_duration_s` within 0.1 s.
 
    For anything the user will publish (launch, promo, ad), also spawn one **critic sub-agent** with the rendered file, the EDL, and any reference videos the user gave. Brief it to roast, not to praise: a verdict, ranked problems with timecodes and evidence (frames, levels), and the 5 fixes to do first. Fresh eyes catch what the author stopped seeing — cut-off payoff lines, 0.5s memes, unreadable 28px text at phone size.
 
