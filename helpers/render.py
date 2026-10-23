@@ -29,6 +29,12 @@ import sys
 from fractions import Fraction
 from pathlib import Path
 
+_HELPERS_DIR = Path(__file__).resolve().parent
+if str(_HELPERS_DIR) not in sys.path:
+    sys.path.insert(0, str(_HELPERS_DIR))
+
+from theme import KNOWN_CAPTION_STYLES, ThemeError, load_theme
+
 try:
     from grade import get_preset, auto_grade_for_clip  # same directory
 except Exception:
@@ -91,6 +97,68 @@ def resolve_path(maybe_path: str, base: Path) -> Path:
     if p.is_absolute():
         return p
     return (base / p).resolve()
+
+
+def resolve_caption_style(edl: dict, theme) -> str:
+    """Style id from the EDL, otherwise the theme default.
+
+    An EDL with no caption fields stays on the theme default (``bold-overlay``
+    in the committed theme). Vietnamese narration with no explicit style uses
+    ``sentence``, because a 2-word English chunk splits syllables. An id
+    outside the catalog is an error before ffmpeg runs.
+    """
+    captions = edl.get("captions") or {}
+    requested = captions.get("style")
+    if not requested:
+        language = captions.get("language") or edl.get("language")
+        if language in ("vi", "vi-VN"):
+            requested = "sentence"
+        else:
+            requested = theme.captions_default
+    if requested not in KNOWN_CAPTION_STYLES:
+        raise SystemExit(f"unknown caption style '{requested}'")
+    return requested
+
+
+def force_style_for(style_id: str) -> str:
+    """force_style string for an SRT burn.
+
+    ``bold-overlay`` is the historical ``SUB_FORCE_STYLE`` string. Other
+    styles prefer an ASS file. The strings below are only the SRT fallback.
+    """
+    if style_id == "bold-overlay":
+        return SUB_FORCE_STYLE
+    if style_id not in KNOWN_CAPTION_STYLES:
+        raise SystemExit(f"unknown caption style '{style_id}'")
+    family = "JetBrains Mono" if style_id == "terminal" else "Be Vietnam Pro"
+    return (
+        f"FontName={family},FontSize=22,Bold=0,"
+        "PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H00000000,"
+        "BorderStyle=1,Outline=2,Shadow=0,"
+        "Alignment=2,MarginV=90"
+    )
+
+
+def scale_filter_for(
+    portrait: bool,
+    draft: bool,
+    frame_mode: str,
+    width: int,
+    height: int,
+) -> str:
+    """ffmpeg scale (and pad) for one segment.
+
+    ``source`` keeps today's long-side scale so footage orientation survives.
+    ``force`` is the generated-plate path: exact theme frame, letterboxed.
+    """
+    if frame_mode == "force" and not draft:
+        return (
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"
+        )
+    if draft:
+        return "scale=-2:1280" if portrait else "scale=1280:-2"
+    return "scale=-2:1920" if portrait else "scale=1920:-2"
 
 
 def resolve_subtitles_path(maybe_path: str, edit_dir: Path) -> Path:
@@ -212,6 +280,22 @@ def parse_fps(value: str) -> str:
     return f"{rate.numerator}/{rate.denominator}"
 
 
+def _probe_duration(path: Path) -> float | None:
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=nw=1:nk=1",
+                str(path),
+            ],
+            capture_output=True, text=True, check=True,
+        )
+        return float(result.stdout.strip())
+    except (subprocess.CalledProcessError, ValueError, OSError):
+        return None
+
+
 def probe_source_fps(video: Path) -> str | None:
     """Return an ffmpeg-ready source rate, preferring the average frame rate.
 
@@ -254,6 +338,8 @@ def extract_segment(
     preview: bool = False,
     draft: bool = False,
     rate: str | None = None,
+    frame_mode: str = "source",
+    frame_size: tuple[int, int] = (1920, 1080),
 ) -> None:
     """Extract a cut range as its own MP4 with grade + 30ms audio fades baked in.
 
@@ -268,10 +354,7 @@ def extract_segment(
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     portrait = is_portrait_source(source)
-    if draft:
-        scale = "scale=-2:1280" if portrait else "scale=1280:-2"
-    else:
-        scale = "scale=-2:1920" if portrait else "scale=1920:-2"
+    scale = scale_filter_for(portrait, draft, frame_mode, frame_size[0], frame_size[1])
 
     vf_parts: list[str] = []
     if is_hdr_source(source):
@@ -320,6 +403,8 @@ def extract_all_segments(
     preview: bool,
     draft: bool = False,
     fps: str | None = None,
+    frame_mode: str = "source",
+    frame_size: tuple[int, int] = (1920, 1080),
 ) -> list[Path]:
     """Extract every EDL range into edit_dir/clips_graded/seg_NN.mp4.
     Returns the ordered list of segment paths.
@@ -373,7 +458,11 @@ def extract_all_segments(
         print(f"  [{i:02d}] {src_name}  {start:7.2f}-{end:7.2f}  ({duration:5.2f}s)  {note}")
         if is_auto:
             print(f"        grade: {seg_filter or '(none)'}")
-        extract_segment(src_path, start, duration, seg_filter, out_path, preview=preview, draft=draft, rate=out_rate)
+        extract_segment(
+            src_path, start, duration, seg_filter, out_path,
+            preview=preview, draft=draft, rate=out_rate,
+            frame_mode=frame_mode, frame_size=frame_size,
+        )
         seg_paths.append(out_path)
 
     return seg_paths
@@ -636,65 +725,36 @@ def build_final_composite(
     subtitles_path: Path | None,
     out_path: Path,
     edit_dir: Path,
+    style_id: str = "bold-overlay",
+    fontsdir: Path | None = None,
+    watermark: dict | None = None,
 ) -> None:
-    """Final pass: base → overlays (PTS-shifted) → subtitles LAST → out.
+    """Final pass: base → overlays (PTS-shifted) → watermark → subtitles LAST.
 
-    If there are no overlays and no subtitles, just copy base to out.
+    If there are no overlays, no watermark, and no subtitles, just copy base.
     """
-    has_overlays = bool(overlays)
-    has_subs = subtitles_path is not None and subtitles_path.exists()
-
-    if not has_overlays and not has_subs:
-        # Nothing to do — just rename/copy base to final name
+    graph = picture_filter_graph(
+        overlays, subtitles_path, edit_dir,
+        style_id=style_id, fontsdir=fontsdir, watermark=watermark,
+    )
+    if graph is None:
         run(["ffmpeg", "-y", "-i", str(base_path), "-c", "copy", str(out_path)], quiet=True)
         return
+    inputs, filter_complex, out_label = graph
 
-    inputs: list[str] = ["-i", str(base_path)]
-    for ov in overlays:
-        ov_path = resolve_path(ov["file"], edit_dir)
-        inputs += ["-i", str(ov_path)]
-
-    filter_parts: list[str] = []
-    # PTS-shift every overlay so its frame 0 lands at start_in_output
-    for idx, ov in enumerate(overlays, start=1):
-        t = float(ov["start_in_output"])
-        filter_parts.append(f"[{idx}:v]setpts=PTS-STARTPTS+{t}/TB[a{idx}]")
-
-    # Chain overlays on top of base
-    current = "[0:v]"
-    for idx, ov in enumerate(overlays, start=1):
-        t = float(ov["start_in_output"])
-        dur = float(ov["duration"])
-        end = t + dur
-        next_label = f"[v{idx}]"
-        filter_parts.append(
-            f"{current}[a{idx}]overlay=enable='between(t,{t:.3f},{end:.3f})'{next_label}"
-        )
-        current = next_label
-
-    # Subtitles LAST — Rule 1
-    if has_subs:
-        subs_abs = str(subtitles_path.resolve()).replace(":", r"\:").replace("'", r"\'")
-        filter_parts.append(
-            f"{current}subtitles='{subs_abs}':force_style='{SUB_FORCE_STYLE}'[outv]"
-        )
-        out_label = "[outv]"
-    else:
-        # Rename the last overlay output to [outv] for consistency
-        if has_overlays:
-            filter_parts.append(f"{current}null[outv]")
-            out_label = "[outv]"
-        else:
-            out_label = "[0:v]"
-
-    filter_complex = ";".join(filter_parts)
-
+    inputs = ["-i", str(base_path), *inputs]
     cmd = [
         "ffmpeg", "-y",
         *inputs,
         "-filter_complex", filter_complex,
         "-map", out_label,
         "-map", "0:a",
+    ]
+    # A long overlay must not stretch the program. The base timeline wins.
+    base_duration = _probe_duration(base_path)
+    if base_duration:
+        cmd += ["-t", f"{base_duration:.3f}"]
+    cmd += [
         "-c:v", "libx264", "-preset", "fast", "-crf", "18",
         "-pix_fmt", "yuv420p",
         "-c:a", "copy",
@@ -702,8 +762,289 @@ def build_final_composite(
         str(out_path),
     ]
     print(f"compositing → {out_path.name}")
-    print(f"  overlays: {len(overlays)}, subtitles: {'yes' if has_subs else 'no'}")
+    print(
+        f"  overlays: {len(overlays)}, "
+        f"subtitles: {'yes' if subtitles_path is not None and subtitles_path.exists() else 'no'}"
+    )
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+
+def picture_filter_graph(
+    overlays: list[dict],
+    subtitles_path: Path | None,
+    edit_dir: Path,
+    *,
+    style_id: str = "bold-overlay",
+    fontsdir: Path | None = None,
+    watermark: dict | None = None,
+):
+    """Return ``(ffmpeg inputs, filtergraph, map label)`` or None when nothing composites."""
+    from brand import append_brand_filters
+
+    has_overlays = bool(overlays)
+    has_subs = subtitles_path is not None and subtitles_path.exists()
+    has_mark = bool(watermark and watermark.get("file"))
+    if not has_overlays and not has_subs and not has_mark:
+        return None
+
+    inputs: list[str] = []
+    for ov in overlays:
+        inputs += ["-i", str(resolve_path(ov["file"], edit_dir))]
+    filter_parts: list[str] = []
+    for idx, ov in enumerate(overlays, start=1):
+        t = float(ov["start_in_output"])
+        filter_parts.append(f"[{idx}:v]setpts=PTS-STARTPTS+{t}/TB[a{idx}]")
+    current = "[0:v]"
+    for idx, ov in enumerate(overlays, start=1):
+        t = float(ov["start_in_output"])
+        end = t + float(ov["duration"])
+        next_label = f"[v{idx}]"
+        filter_parts.append(
+            f"{current}[a{idx}]overlay=enable='between(t,{t:.3f},{end:.3f})'{next_label}"
+        )
+        current = next_label
+
+    subs_clause = None
+    if has_subs:
+        from captions import require_libass, subtitle_filter
+
+        require_libass()
+        if subtitles_path.suffix.lower() == ".ass":
+            subs_clause = subtitle_filter(subtitles_path, fontsdir=fontsdir)
+        else:
+            subs_clause = subtitle_filter(
+                subtitles_path, force_style=force_style_for(style_id)
+            )
+    mark_index = None
+    mark_xy = None
+    if has_mark:
+        mark_index = 1 + len(overlays)
+        inputs += ["-i", str(watermark["file"])]
+        mark_xy = (int(watermark.get("x", 0)), int(watermark.get("y", 0)))
+    out_label = append_brand_filters(
+        filter_parts,
+        current,
+        watermark_input=mark_index,
+        watermark_xy_px=mark_xy,
+        subs_clause=subs_clause,
+    )
+    return inputs, ";".join(filter_parts), out_label
+
+
+def mix_stems(picture: Path, out_path: Path, edl: dict, edit_dir: Path) -> list[str]:
+    """Mix voice, SFX, and music onto a copied picture. Video is not re-filtered."""
+    from audio import build_mix_graph, mix_command
+
+    audio_block = edl.get("audio") or {}
+    voice = audio_block.get("voice") or {}
+    voice_file = voice.get("file")
+    voice_from_video = not voice_file
+    voice_path = None if voice_from_video else resolve_path(voice_file, edit_dir)
+    sfx = list(audio_block.get("sfx") or [])
+    music = audio_block.get("music")
+    if not (isinstance(music, dict) and music.get("file")):
+        music = None
+    voice_input = 0 if voice_from_video else 1
+    graph = build_mix_graph(
+        sfx=sfx,
+        music=music,
+        voice_sample_rate=int(voice.get("sample_rate") or 48000),
+        voice_start=float(voice.get("start") or 0.0),
+        voice_input=voice_input,
+    )
+    cmd = mix_command(
+        picture,
+        voice_path,
+        [resolve_path(item["file"], edit_dir) for item in sfx],
+        resolve_path(music["file"], edit_dir) if music else None,
+        graph,
+        out_path,
+        voice_from_video,
+    )
+    print(f"mix → {out_path.name}")
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    return cmd
+
+
+def _finish_picture(
+    edl: dict,
+    edit_dir: Path,
+    out_path: Path,
+    base_path: Path,
+    overlays: list[dict],
+    subs_path: Path | None,
+    *,
+    style_id: str,
+    fontsdir: Path | None,
+    no_loudnorm: bool,
+    draft: bool,
+    watermark: dict | None = None,
+) -> None:
+    from audio import should_mix
+
+    if should_mix(edl):
+        picture = out_path.with_suffix(".picture.mp4")
+        build_final_composite(
+            base_path, overlays, subs_path, picture, edit_dir,
+            style_id=style_id, fontsdir=fontsdir, watermark=watermark,
+        )
+        if no_loudnorm:
+            mix_stems(picture, out_path, edl, edit_dir)
+            picture.unlink(missing_ok=True)
+            return
+        mixed = out_path.with_suffix(".mixed.mp4")
+        mix_stems(picture, mixed, edl, edit_dir)
+        picture.unlink(missing_ok=True)
+        print("loudness normalization → social-ready (-14 LUFS / -1 dBTP / LRA 11)")
+        apply_loudnorm_two_pass(mixed, out_path, preview=draft)
+        mixed.unlink(missing_ok=True)
+        return
+
+    if no_loudnorm:
+        build_final_composite(
+            base_path, overlays, subs_path, out_path, edit_dir,
+            style_id=style_id, fontsdir=fontsdir, watermark=watermark,
+        )
+        return
+    prenorm = out_path.with_suffix(".prenorm.mp4")
+    build_final_composite(
+        base_path, overlays, subs_path, prenorm, edit_dir,
+        style_id=style_id, fontsdir=fontsdir, watermark=watermark,
+    )
+    print("loudness normalization → social-ready (-14 LUFS / -1 dBTP / LRA 11)")
+    apply_loudnorm_two_pass(prenorm, out_path, preview=draft)
+    prenorm.unlink(missing_ok=True)
+
+
+def render_edl(
+    edl: dict,
+    edit_dir: Path,
+    out_path: Path,
+    *,
+    preview: bool = False,
+    draft: bool = False,
+    fps: str | None = None,
+    build_subtitles: bool = False,
+    no_subtitles: bool = False,
+    no_loudnorm: bool = False,
+    theme=None,
+) -> None:
+    """Extract, concat, composite, optional mix, then loudnorm."""
+    edit_dir = Path(edit_dir)
+    out_path = Path(out_path)
+    if theme is None:
+        try:
+            theme = load_theme(edit_dir)
+        except ThemeError as exc:
+            sys.exit(str(exc))
+    from brand import BrandError, materialize_cards, require_logo, watermark_xy
+
+    try:
+        require_logo(theme)
+    except BrandError as exc:
+        sys.exit(str(exc))
+    if (theme.intro or {}).get("enabled") or (theme.outro or {}).get("enabled"):
+        edl = materialize_cards(edl, theme, edit_dir)
+    else:
+        from brand import with_brand_ranges
+
+        edl = with_brand_ranges(edl, theme)
+    from audio import (
+        MusicError,
+        apply_music_policy,
+        attach_sfx,
+        load_music_manifest,
+        timeline_duration,
+    )
+
+    sfx_cfg = theme.sfx or {}
+    sfx_root = Path(__file__).resolve().parents[1] / "brand" / "sfx"
+    edl = attach_sfx(
+        edl,
+        edit_dir,
+        preset=str(sfx_cfg.get("preset") or "generated"),
+        intro_join=str(sfx_cfg.get("intro_join") or "transition"),
+        optional=bool(sfx_cfg.get("optional", False)),
+        min_gap=float(sfx_cfg.get("max_gap_s", 1.5)),
+        span=float(sfx_cfg.get("span_s", 20)),
+        max_in_span=int(sfx_cfg.get("max_in_span", 8)),
+        manifest_path=sfx_root / "manifest.json",
+        root=sfx_root,
+    )
+    music_dir = Path(__file__).resolve().parents[1] / "brand" / "music"
+    music_manifest_path = music_dir / "manifest.json"
+    if music_manifest_path.is_file():
+        try:
+            music_manifest = load_music_manifest(music_manifest_path)
+        except MusicError as exc:
+            sys.exit(str(exc))
+    else:
+        music_manifest = {"enabled": False, "beds": []}
+    try:
+        edl = apply_music_policy(
+            edl,
+            edit_dir,
+            theme.music or {},
+            music_manifest,
+            music_dir,
+            timeline_duration(edl),
+        )
+    except MusicError as exc:
+        sys.exit(str(exc))
+    (edit_dir / "edl.resolved.json").write_text(json.dumps(edl, indent=2))
+    style_id = resolve_caption_style(edl, theme)
+    language = (
+        (edl.get("captions") or {}).get("language")
+        or edl.get("language")
+        or "en"
+    )
+    fontsdir = theme.font("body").file.parent
+    frame_mode = theme.frame_mode
+    if edl.get("plate") or (edl.get("frame") or {}).get("mode") == "force":
+        frame_mode = "force"
+    segment_paths = extract_all_segments(
+        edl, edit_dir, preview=preview, draft=draft, fps=fps,
+        frame_mode=frame_mode,
+        frame_size=(theme.frame_width, theme.frame_height),
+    )
+    if draft:
+        base_name = "base_draft.mp4"
+    elif preview:
+        base_name = "base_preview.mp4"
+    else:
+        base_name = "base.mp4"
+    base_path = edit_dir / base_name
+    concat_segments(segment_paths, base_path, edit_dir)
+    subs_path: Path | None = None
+    if not no_subtitles:
+        if build_subtitles:
+            from captions import cues_for_edl, write_ass
+
+            subs_path = edit_dir / "master.ass"
+            write_ass(
+                cues_for_edl(edl, edit_dir, style_id, language),
+                subs_path, theme, style_id,
+            )
+        elif edl.get("subtitles"):
+            subs_path = resolve_subtitles_path(edl["subtitles"], edit_dir)
+    overlays = list(edl.get("overlays") or [])
+    watermark = None
+    if (theme.watermark or {}).get("enabled"):
+        x, y = watermark_xy(
+            theme.frame_width,
+            theme.frame_height,
+            int(theme.watermark.get("width_px") or 160),
+            int(theme.watermark.get("margin_px") or 36),
+            theme.watermark.get("corner") or "top-right",
+        )
+        from brand import logo_path
+
+        watermark = {"file": str(logo_path(theme)), "x": x, "y": y}
+    _finish_picture(
+        edl, edit_dir, out_path, base_path, overlays, subs_path,
+        style_id=style_id, fontsdir=fontsdir,
+        no_loudnorm=no_loudnorm, draft=draft, watermark=watermark,
+    )
 
 
 # -------- Main ---------------------------------------------------------------
@@ -756,42 +1097,17 @@ def main() -> None:
     edit_dir = edl_path.parent
     out_path = args.output.resolve()
 
-    # 1. Extract per-segment (auto-grade per range if EDL grade is "auto")
-    segment_paths = extract_all_segments(
-        edl, edit_dir, preview=args.preview, draft=args.draft, fps=args.fps
+    render_edl(
+        edl,
+        edit_dir,
+        out_path,
+        preview=args.preview,
+        draft=args.draft,
+        fps=args.fps,
+        build_subtitles=args.build_subtitles,
+        no_subtitles=args.no_subtitles,
+        no_loudnorm=args.no_loudnorm,
     )
-
-    # 2. Concat → base
-    if args.draft:
-        base_name = "base_draft.mp4"
-    elif args.preview:
-        base_name = "base_preview.mp4"
-    else:
-        base_name = "base.mp4"
-    base_path = edit_dir / base_name
-    concat_segments(segment_paths, base_path, edit_dir)
-
-    # 3. Subtitles: build if requested, resolve final path
-    subs_path: Path | None = None
-    if not args.no_subtitles:
-        if args.build_subtitles:
-            subs_path = edit_dir / "master.srt"
-            build_master_srt(edl, edit_dir, subs_path)
-        elif edl.get("subtitles"):
-            subs_path = resolve_subtitles_path(edl["subtitles"], edit_dir)
-
-    # 4. Composite (overlays + subtitles LAST) → intermediate (pre-loudnorm) path
-    overlays = edl.get("overlays") or []
-    if args.no_loudnorm:
-        # Composite directly to final output
-        build_final_composite(base_path, overlays, subs_path, out_path, edit_dir)
-    else:
-        # Composite to a temp file, then run loudnorm → final output
-        tmp_composite = out_path.with_suffix(".prenorm.mp4")
-        build_final_composite(base_path, overlays, subs_path, tmp_composite, edit_dir)
-        print("loudness normalization → social-ready (-14 LUFS / -1 dBTP / LRA 11)")
-        apply_loudnorm_two_pass(tmp_composite, out_path, preview=args.draft)
-        tmp_composite.unlink(missing_ok=True)
 
     size_mb = out_path.stat().st_size / (1024 * 1024)
     print(f"\ndone: {out_path} ({size_mb:.1f} MB)")

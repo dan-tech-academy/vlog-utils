@@ -69,18 +69,30 @@ First-time install lives in `install.md` (clone, deps, ffmpeg, skill registratio
 
 Helpers (`helpers/transcribe.py`, `helpers/render.py`, etc.) live alongside this SKILL.md. Resolve their paths relative to the directory containing this file — the skill is typically symlinked at `~/.claude/skills/video-use/` or `~/.codex/skills/video-use/`.
 
+## Channel theme
+
+Dan Tech renders read `brand/theme.json`. A session file `<edit>/theme.json` replaces that file wholesale. Do not deep-merge, and do not invent a second palette in prose.
+
+The committed colors are **placeholders** (`meta.placeholders` is true). They are not the final brand. The on-screen handle is `@dantech0xff`. Watermark and intro stay off until `brand/logo.png` exists and the theme turns them on. When they are on, include them in the strategy proposal instead of inventing a title card. `render.py` writes `edit/edl.resolved.json` with the intro and outro ranges it actually used. The watermark is an overlay under the subtitles, hidden on the intro and outro cards.
+
+Caption safe-zone margin is `captions.margin_v` (the code default is **90**, including the vertical-video UI). The worked `MarginV=35` example below is historical. Use the theme value. Fonts are the files named in the theme (Be Vietnam Pro and JetBrains Mono, both OFL). A missing font file aborts before ffmpeg.
+
 ## Helpers
 
 - **`transcribe.py <video>`** — single-file Scribe call. `--num-speakers N` optional. Cached.
 - **`transcribe_batch.py <videos_dir>`** — 4-worker parallel transcription. Use for multi-take.
 - **`pack_transcripts.py --edit-dir <dir>`** — `transcripts/*.json` → `takes_packed.md` (phrase-level, break on silence ≥ 0.5s).
 - **`timeline_view.py <video> <start> <end>`** — filmstrip + waveform PNG. On-demand visual drill-down. **Not a scan tool** — use it at decision points, not constantly.
-- **`render.py <edl.json> -o <out>`** — per-segment extract → concat → overlays (PTS-shifted) → subtitles LAST. `--preview` for 720p fast. `--build-subtitles` to generate master.srt inline.
+- **`render.py <edl.json> -o <out>`** — per-segment extract → concat → overlays (PTS-shifted) → subtitles LAST. `--preview` for 720p fast. `--build-subtitles` writes `master.ass`.
+- **`speak.py --text-file script.txt --out edit/audio/voice.wav --words edit/audio/voice.words.json`** — Azure neural TTS. Word times are SDK word boundaries. If `AZURE_SPEECH_KEY` is missing, edge-tts is the dev fallback. Do not time a synthesized WAV with Scribe.
 - **`grade.py <in> -o <out>`** — ffmpeg filter chain grade. Presets + `--filter '<raw>'` for custom.
+- **`compile_script.py script.json --edit-dir <edit> --plan`** — narration path. Prints the voice, template ids, SFX kinds, and music id. No ffmpeg, no speech API. Drop `--plan` to synthesize, build the plate, and render. A folder of camera files stays on the inventory path. `compile_script.py` is only for a folder that has `script.json` and no camera media.
 
-For animations, create `<edit>/animations/slot_<id>/` with `Bash` and spawn a sub-agent via the `Agent` tool.
+For a custom animation slot, create `<edit>/animations/slot_<id>/` with `Bash` and spawn a sub-agent via the `Agent` tool. The catalog does not need a sub-agent.
 
 ## The process
+
+A folder of camera files stays on the inventory path. `compile_script.py` is only for a folder that has `script.json` and no camera media. Confirm language, voice id, template choices, bed id, and runtime before a new synthesis. A cache hit may render without asking again.
 
 1. **Inventory.** `ffprobe` every source. `transcribe_batch.py` on the directory. `pack_transcripts.py` to produce `takes_packed.md`. Sample one or two `timeline_view`s for a visual first impression.
 2. **Pre-scan for problems.** One pass over `takes_packed.md` to note verbal slips, obvious mis-speaks, or phrasings to avoid. Plain list, feed into the editor brief.
@@ -97,6 +109,8 @@ For animations, create `<edit>/animations/slot_<id>/` with `Bash` and spawn a su
    Also sample: first 2s, last 2s, and 2–3 mid-points — check grade consistency, subtitle readability, overall coherence. Run `ffprobe` on the output to verify duration matches the EDL expectation.
 
    Measure the audio, don't assume it: `ffmpeg -i out.mp4 -af ebur128=peak=true -f null -` for integrated loudness and true peak, plus RMS per section (dialogue, music-only, end card). An end card 15 dB under the dialogue, or effects louder than speech, is a bug. You cannot listen: say so, and report the numbers.
+
+   On a generated video, also sample a frame in the intro (only when the theme enables it), on a content beat, and on the outro. The watermark is present only where the theme enables it. Captions sit inside the safe band, and diacritics are drawn (a missing glyph looks like a box on the timeline PNG). Run `ebur128` on the voice stem, the music stem, and the full mix, for a voice section and a music-only section. Ducked music should sit about 12–15 dB under its dry level. An SFX stem whose peak exceeds the voice stem's peak is a bug. `ffprobe` duration matches `total_duration_s` within 0.1 s.
 
    For anything the user will publish (launch, promo, ad), also spawn one **critic sub-agent** with the rendered file, the EDL, and any reference videos the user gave. Brief it to roast, not to praise: a verdict, ranked problems with timecodes and evidence (frames, levels), and the 5 fixes to do first. Fresh eyes catch what the author stopped seeing — cut-off payoff lines, 0.5s memes, unreadable 28px text at phone size.
 
@@ -185,7 +199,7 @@ Subtitles have three dimensions worth reasoning about: **chunking** (1/2/3/sente
 
 **Worked styles** — pick, adapt, or invent:
 
-**`bold-overlay`** — short-form tech launch, fast-paced social. ~2-word chunks, UPPERCASE, break on punctuation and pauses ≥ 0.3s, grow to 3 words rather than flash a cue < 0.35s (`chunk_words` in `render.py`), Helvetica 18 Bold, white-on-outline, `MarginV=35`. `render.py` ships with this as `SUB_FORCE_STYLE`.
+**`bold-overlay`** — short-form tech launch, fast-paced social. ~2-word chunks, UPPERCASE, break on punctuation and pauses ≥ 0.3s, grow to 3 words rather than flash a cue < 0.35s (`chunk_words` in `render.py`), white-on-outline. `render.py` still ships the historical `SUB_FORCE_STYLE` string for this id (Helvetica 18 Bold). The margin that actually clears the vertical UI is the theme's `captions.margin_v` (**90** in code). Do not copy the `MarginV=35` line below into a new render.
 
 ```
 FontName=Helvetica,FontSize=18,Bold=1,
@@ -194,17 +208,27 @@ BorderStyle=1,Outline=2,Shadow=0,
 Alignment=2,MarginV=35
 ```
 
-**`natural-sentence`** (if you invent this mode) — narrative, documentary, education. 4–7 word chunks, sentence case, break on natural pauses, `MarginV=60–80`, larger font for readability, slightly wider max-width. No shipped force_style — design one if you need it.
+Shipped styles live in `helpers/captions.py` and burn as ASS (`fontsdir` set, no `force_style`). An existing `.srt` still burns with `force_style`. `PlayRes` is the frame size, so `margin_v` is pixels.
 
-Invent a third style if neither fits. Hard rules: subtitles LAST (Rule 1), output-timeline offsets (Rule 5).
+| Id | When |
+| --- | --- |
+| `bold-overlay` | English footage default. 2–3 word uppercase chunks. |
+| `sentence` | Vietnamese default, and long-form. 12–18 syllables, or 4–7 English words. Case stays as spoken. |
+| `karaoke` | One phrase, `\kf` on the word times, active word in the accent color. |
+| `terminal` | Commands. JetBrains Mono on the theme surface. |
+| `emphasis` | A short window around one payoff word, drawn in the accent color. |
+
+Hard rules: subtitles LAST (Rule 1), output-timeline offsets (Rule 5). Do not pass `force_style` on an `.ass` file.
 
 ## Animations (when requested)
 
 Animations match the content and the brand. **Get the palette, font, and visual language from the conversation** — never assume a default. If the user hasn't told you, propose a palette in the strategy phase and wait for confirmation before building anything.
 
-**Tool options:**
+**Default is the catalog.** `helpers/visuals/select.py` picks one of `kinetic`, `section`, `stat`, `list`, `comparison`, `code`, `question`, `quote` from the phrase. The same phrase picks the same id. A `custom` overlay is left alone. Use HyperFrames, Remotion, or Manim only for a diagram the catalog cannot draw (a state machine, an equation). Do not spawn a sub-agent per line.
 
-Pick the engine per animation slot. Do not default to Remotion just because the animation is web-adjacent.
+**Tool options for a custom slot:**
+
+Pick the engine per custom slot. Do not default to Remotion just because the animation is web-adjacent.
 
 - **HyperFrames** — Browser-native HTML/CSS/GSAP video compositions: product UI motion, website-to-video or mockup-to-video captures, kinetic typography, landing-page/storyboard promos, data-driven UI states, transparent WebM overlays, and clips that need deterministic frame capture plus HyperFrames lint/validate/render checks. Best when the animation should be authored and verified like a web composition instead of a React component tree.
 - **Remotion** — React/CSS compositions with component state, reusable React primitives, or an existing Remotion brand system. Best when the user specifically asks for React/Remotion or when React composition is the simpler authoring model.
@@ -273,11 +297,11 @@ One sub-agent = one file (unique filenames, parallel agents don't overwrite each
 
 Sound is where generated videos sound cheap. Worked rules from launch edits:
 
-- **Fewer effects.** Every effect is tied to something visible (a cut, a landing, a click). ~20 stock whooshes/risers/impacts in 18s reads as generic; ~8 reads as designed.
+- **Fewer effects.** Every effect is tied to something visible (a cut, a landing, a click). The resolver drops `tick`, then `cut`, to keep at most one SFX per 1.5 s and about 8 in any 20 s, and writes the dropped ids to `edit/audio/sfx-dropped.json`. `brand/sfx/` is a generated CC0 set, one clip per role. Cut SFX are on for `sfx.preset: generated` and off for documentary footage.
 - **Hit on the frame.** Most effects have an attack (silence or a build before the transient). Measure it (first sample above ~-30 dBFS of the peak) and start the file `attack` seconds *before* the visible contact frame.
-- **Duck music under speech** (roughly -12 to -15 dB relative to its music-only level), and ramp it out before a stinger or end card instead of letting its own tail decay under your CTA.
+- **Duck music under speech** by `duck_db` (default −13 dB, inside the −12 to −15 window) with an 80 ms attack and a 400 ms release, measured against the bed's own level in a silent gap. Ramp the bed so it is silent at the outro start.
 - **Master once:** mix to PCM, then two-pass loudnorm (-14 LUFS, true peak ≤ -1 dBTP) on the final mix. Then measure per section (see Self-eval).
-- **Music taste is the user's call.** Generated music defaults to "hype"; offer two contrasting beds and let the user listen. Don't claim a mix sounds good — you can only measure it.
+- **Music stays off until a bed exists.** `music.enabled` is false in the theme and in `brand/music/manifest.json`. Offer the beds listed there and wait for the owner to add a licensed instrumental file. Do not generate a bed. A bed with `vocals: true` is rejected. Do not claim the mix sounds good. Report the ebur128 numbers.
 
 ## Output spec
 
@@ -304,7 +328,21 @@ Match the source unless the user asked for something specific. Common targets: `
 }
 ```
 
-`grade` is a preset name or raw ffmpeg filter. `overlays` are rendered animation clips. `subtitles` is optional and applied LAST.
+`grade` is a preset name or raw ffmpeg filter. `overlays` are rendered animation clips. `subtitles` is optional and applied LAST. Animation slots stay silent: a whoosh baked into an overlay MP4 is dropped. Put sound on the timeline instead.
+
+EDL version 2 adds an `audio` block (voice stem, SFX events, music). Version 1 files still render with no mix pass. The mix uses `amix=normalize=0`, resamples every stem to 48 kHz, and runs before the final loudnorm. 30 ms fades stay on the voice segments only.
+
+```json
+{
+  "version": 2,
+  "audio": {
+    "voice": {"file": "edit/audio/voice.wav", "start": 0.0},
+    "events": [{"kind": "cut", "at": 4.20}],
+    "sfx": [{"file": "brand/sfx/cut.wav", "at": 4.11, "gain_db": -8}],
+    "music": {"file": "brand/music/bed.wav", "gain_db": -16, "duck_db": -13}
+  }
+}
+```
 
 ## Memory — `project.md`
 

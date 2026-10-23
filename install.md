@@ -125,6 +125,15 @@ Scribe (ElevenLabs) does all transcription. Without a key, nothing transcribes.
 
     `200` means the key works. `401` means the user pasted a wrong/expired key — ask once more and stop. Anything else (network, 5xx), move on and verify during first real transcription.
 
+Generated narration uses Azure Speech, not ElevenLabs. Append these to the same `.env` (do not overwrite a file that already has the Scribe key):
+
+```bash
+# AZURE_SPEECH_KEY=
+# AZURE_SPEECH_REGION=
+```
+
+Leave them blank and the dev fallback is edge-tts (`pip install edge-tts`). Do not print either secret. There is no Gemini key.
+
 ### 6. Verify end-to-end
 
 Run one real thing. Prefer the lightest verification that still proves the pipeline is wired up:

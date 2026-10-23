@@ -39,6 +39,17 @@ cd /path/to/your/videos
 claude    # or codex, hermes, etc.
 ```
 
+## Generate from a script
+
+Footage still uses the inventory path above. A folder with `script.json` and no camera files is a different entry point:
+
+```bash
+python helpers/compile_script.py /path/to/videos/script.json --edit-dir /path/to/videos/edit --plan
+python helpers/compile_script.py /path/to/videos/script.json --edit-dir /path/to/videos/edit --provider fake
+```
+
+`--plan` prints the voice, the template for each beat, the SFX kinds, and the music id. It does not call ffmpeg or a speech API. The catalog (stat, list, comparison, code, section, question, kinetic, quote) is the default picture. `visual: "custom"` is the slot for HyperFrames, Remotion, or Manim. Confirm language, voice, templates, bed, and runtime before a new synthesis. A cache hit may render without asking again.
+
 For always-on editing from your own VPS or Telegram, run the agent through [Browser Use Box](https://browser-use.com/bux). [Watch the 15-second demo](https://www.tiktok.com/@browser_use/video/7639824093721758989).
 
 And in the session:

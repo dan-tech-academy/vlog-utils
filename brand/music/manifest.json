@@ -1,0 +1,10 @@
+{
+  "enabled": false,
+  "note": "No beds are committed. Add a licensed instrumental file, list it under beds with vocals false, then set enabled to true here and in the theme.",
+  "duck_db": -13,
+  "attack_s": 0.08,
+  "release_s": 0.4,
+  "fade_in_s": 0.15,
+  "fade_out_s": 0.5,
+  "beds": []
+}

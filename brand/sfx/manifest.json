@@ -1,0 +1,8 @@
+{
+  "cut": {"file": "cut.wav", "gain_db": -10},
+  "transition": {"file": "whoosh.wav", "gain_db": -12},
+  "reveal": {"file": "pop.wav", "gain_db": -8},
+  "tick": {"file": "tick.wav", "gain_db": -14},
+  "impact": {"file": "impact.wav", "gain_db": -6},
+  "stinger": {"file": "stinger.wav", "gain_db": -4}
+}
