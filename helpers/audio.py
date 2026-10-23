@@ -8,6 +8,7 @@ placed start. Loudnorm stays outside this module, on the mixed file.
 from __future__ import annotations
 
 import json
+import subprocess
 import wave
 from pathlib import Path
 
@@ -107,12 +108,9 @@ def build_mix_graph(
         labels.append(f"[{label}]")
         index += 1
     if music and music.get("file"):
-        gain = float(music.get("gain_db", -16.0))
-        duck = float(music.get("duck_db", -13.0))
-        spans = [(float(a), float(b)) for a, b in (music.get("voice_spans") or [])]
         parts.append(
             f"[{index}:a]aresample=48000,aformat=channel_layouts=stereo,"
-            f"volume={gain:.3f}dB,{duck_volume_expr(spans, duck)}[bed]"
+            f"{music_gain_chain(music)}[bed]"
         )
         labels.append("[bed]")
     if len(labels) == 1:
@@ -284,6 +282,277 @@ def attach_sfx(
         span=span,
         max_in_span=max_in_span,
     )
+    updated = dict(edl)
+    updated["audio"] = audio
+    return updated
+
+
+class MusicError(ValueError):
+    """A bed is missing, vocal, or requested while the channel lock is inconsistent."""
+
+
+def escape_filter_expr(expr: str) -> str:
+    return expr.replace("\\", r"\\").replace(",", r"\,").replace(":", r"\:")
+
+
+def _lin(var: str, t0: float, t1: float, y0: float, y1: float) -> str:
+    span = t1 - t0
+    if span <= 1e-4:
+        return f"{y1:.6f}"
+    return f"({y0:.6f}+({y1 - y0:.6f})*({var}-{t0:.3f})/{span:.3f})"
+
+
+def music_envelope_expr(music: dict) -> str:
+    """Linear gain: 1 in gaps, ``duck_db`` under voice, 0 at the outro start.
+
+    Attack and release are ramps around each voice span. The fade-in is a
+    short ramp from silence at t=0. The fade-out finishes at ``outro_start``.
+    """
+    ducked = db_to_linear(float(music.get("duck_db", -13.0)))
+    attack = max(0.0, float(music.get("attack_s", 0.08)))
+    release = max(0.0, float(music.get("release_s", 0.40)))
+    expr = "1"
+    spans = [(float(a), float(b)) for a, b in (music.get("voice_spans") or [])]
+    for start, end in reversed(spans):
+        if end <= start:
+            continue
+        a1 = min(start + attack, end)
+        r1 = end + release
+        down = _lin("t", start, a1, 1.0, ducked)
+        hold = f"{ducked:.6f}"
+        up = _lin("t", end, r1, ducked, 1.0)
+        expr = (
+            f"if(between(t,{start:.3f},{a1:.3f}),{down},"
+            f"if(between(t,{a1:.3f},{end:.3f}),{hold},"
+            f"if(between(t,{end:.3f},{r1:.3f}),{up},{expr})))"
+        )
+    fade_in = float(music.get("fade_in_s", 0.15))
+    if fade_in > 1e-4:
+        expr = f"({expr})*if(lt(t,{fade_in:.3f}),t/{fade_in:.3f},1)"
+    outro = music.get("outro_start")
+    fade_out = float(music.get("fade_out_s", 0.50))
+    if outro is not None and fade_out > 1e-4:
+        stop = float(outro)
+        begin = stop - fade_out
+        expr = (
+            f"({expr})*if(lt(t,{begin:.3f}),1,"
+            f"if(lt(t,{stop:.3f}),({stop:.3f}-t)/{fade_out:.3f},0))"
+        )
+    return expr
+
+
+def music_gain_chain(music: dict) -> str:
+    """Bed gain, then the duck and fade envelope. ``gain_db`` is the dry level."""
+    gain = float(music.get("gain_db", -16.0))
+    # eval=frame: the default evaluates t once, so a fade-in at 0 mutes the bed.
+    return (
+        f"volume={gain:.3f}dB,"
+        f"volume='{escape_filter_expr(music_envelope_expr(music))}':eval=frame"
+    )
+
+
+def load_music_manifest(path: Path) -> dict:
+    data = json.loads(Path(path).read_text())
+    for bed in data.get("beds") or []:
+        if bed.get("vocals") is True:
+            ident = bed.get("id", "?")
+            raise MusicError(
+                f"music bed '{ident}' sets vocals true; beds stay instrumental"
+            )
+    return data
+
+
+def music_is_on(theme_music: dict | None, manifest: dict | None = None) -> bool:
+    """Both locks have to be open. The committed manifest stays closed."""
+    if not (theme_music or {}).get("enabled"):
+        return False
+    if manifest is not None and manifest.get("enabled") is False:
+        return False
+    return True
+
+
+def voice_spans_from_ranges(ranges: list[dict]) -> list[list[float]]:
+    spans: list[list[float]] = []
+    offset = 0.0
+    for segment in ranges:
+        duration = float(segment["end"]) - float(segment["start"])
+        if segment.get("role", "content") == "content":
+            spans.append([round(offset, 6), round(offset + duration, 6)])
+        offset += duration
+    return spans
+
+
+def outro_start_from_ranges(ranges: list[dict]) -> float | None:
+    offset = 0.0
+    for segment in ranges:
+        if segment.get("role") == "outro":
+            return round(offset, 6)
+        offset += float(segment["end"]) - float(segment["start"])
+    return None
+
+
+def timeline_duration(edl: dict) -> float:
+    if edl.get("total_duration_s"):
+        return float(edl["total_duration_s"])
+    total = 0.0
+    for segment in edl.get("ranges") or []:
+        total += float(segment["end"]) - float(segment["start"])
+    return total
+
+
+def _bed_by_id(manifest: dict, bed_id: str) -> dict:
+    for bed in manifest.get("beds") or []:
+        if bed.get("id") == bed_id:
+            return bed
+    raise MusicError(f"music bed '{bed_id}' is not in the manifest")
+
+
+def read_pcm(path: Path) -> tuple[np.ndarray, int]:
+    with wave.open(str(path), "rb") as handle:
+        rate = handle.getframerate()
+        channels = handle.getnchannels()
+        width = handle.getsampwidth()
+        frames = handle.readframes(handle.getnframes())
+    if width != 2 or rate <= 0:
+        raise ValueError(f"{path} must be 16-bit PCM")
+    samples = np.frombuffer(frames, dtype="<i2").astype(np.float64) / 32768.0
+    if channels > 1:
+        samples = samples.reshape(-1, channels)
+    return samples, rate
+
+
+def write_pcm(path: Path, samples: np.ndarray, rate: int) -> None:
+    data = np.asarray(samples, dtype=np.float64)
+    if data.ndim == 1:
+        channels = 1
+        flat = data
+    else:
+        channels = int(data.shape[1])
+        flat = data.reshape(-1)
+    pcm = np.clip(np.round(flat * 32767.0), -32768, 32767).astype("<i2")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(channels)
+        handle.setsampwidth(2)
+        handle.setframerate(rate)
+        handle.writeframes(pcm.tobytes())
+
+
+def loop_pcm(samples: np.ndarray, rate: int, duration: float, crossfade_s: float = 0.05) -> np.ndarray:
+    """Repeat a mono buffer to ``duration`` with a short overlap at each join."""
+    target = max(1, int(round(float(duration) * rate)))
+    data = np.asarray(samples, dtype=np.float64).reshape(-1)
+    if data.size == 0:
+        return np.zeros(target, dtype=np.float64)
+    if data.size >= target:
+        return data[:target].copy()
+    cf = int(round(crossfade_s * rate))
+    cf = min(cf, data.size // 2)
+    if cf < 2:
+        reps = int(np.ceil(target / data.size))
+        return np.tile(data, reps)[:target]
+    fade_down = np.linspace(1.0, 0.0, cf, endpoint=False)
+    fade_up = 1.0 - fade_down
+    out = data.copy()
+    while out.size < target:
+        blended = out[-cf:] * fade_down + data[:cf] * fade_up
+        out = np.concatenate([out[:-cf], blended, data[cf:]])
+    return out[:target]
+
+
+def prepare_bed(
+    src: Path,
+    dest: Path,
+    duration: float,
+    *,
+    loop: bool = True,
+    crossfade_s: float = 0.05,
+    rate: int = 48000,
+) -> Path:
+    """Decode, then loop or trim to the output duration. Fades stay in the graph."""
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    decoded = dest.with_suffix(".decoded.wav")
+    cmd = [
+        "ffmpeg", "-y", "-i", str(src),
+        "-ac", "2", "-ar", str(rate),
+        "-c:a", "pcm_s16le",
+        str(decoded),
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    samples, file_rate = read_pcm(decoded)
+    decoded.unlink(missing_ok=True)
+    if samples.ndim == 1:
+        samples = np.stack([samples, samples], axis=1)
+    target = max(1, int(round(float(duration) * file_rate)))
+    columns = []
+    for channel in range(samples.shape[1]):
+        column = samples[:, channel]
+        if loop and column.size < target:
+            columns.append(loop_pcm(column, file_rate, duration, crossfade_s))
+        elif column.size >= target:
+            columns.append(column[:target])
+        else:
+            columns.append(np.pad(column, (0, target - column.size)))
+    write_pcm(dest, np.stack(columns, axis=1), file_rate)
+    return dest
+
+
+def apply_music_policy(
+    edl: dict,
+    edit_dir: Path,
+    theme_music: dict,
+    manifest: dict,
+    manifest_dir: Path,
+    duration: float,
+) -> dict:
+    """Drop the bed when the channel lock is closed. Otherwise loop it to length.
+
+    A closed lock removes ``audio.music`` so the mix graph matches a render
+    that never had a bed.
+    """
+    if not should_mix(edl):
+        return edl
+    audio = dict(edl.get("audio") or {})
+    if not music_is_on(theme_music, manifest):
+        audio.pop("music", None)
+        updated = dict(edl)
+        updated["audio"] = audio
+        return updated
+    music = dict(audio.get("music") or {})
+    bed_id = music.get("id") or (theme_music or {}).get("id")
+    if bed_id and not music.get("file"):
+        bed = _bed_by_id(manifest, str(bed_id))
+        music["file"] = str(Path(manifest_dir) / bed["file"])
+        music.setdefault("gain_db", bed.get("gain_db", -16))
+        music.setdefault("loop", bed.get("loop", True))
+        music["id"] = bed_id
+    if not music.get("file"):
+        raise MusicError("music.enabled is true and no bed file or id is set")
+    src = Path(music["file"])
+    if not src.is_file():
+        raise MusicError(f"music bed missing file {src}")
+    defaults = {
+        "duck_db": -13.0,
+        "attack_s": 0.08,
+        "release_s": 0.4,
+        "fade_in_s": 0.15,
+        "fade_out_s": 0.5,
+    }
+    for key, fallback in defaults.items():
+        if key not in music:
+            music[key] = (theme_music or {}).get(key, manifest.get(key, fallback))
+    if not music.get("voice_spans"):
+        music["voice_spans"] = voice_spans_from_ranges(list(edl.get("ranges") or []))
+    if "outro_start" not in music:
+        outro = outro_start_from_ranges(list(edl.get("ranges") or []))
+        if outro is not None:
+            music["outro_start"] = outro
+    if duration > 0:
+        dest = Path(edit_dir) / "audio" / "bed.wav"
+        prepare_bed(src, dest, duration, loop=bool(music.get("loop", True)))
+        music["file"] = str(dest)
+    audio["music"] = music
     updated = dict(edl)
     updated["audio"] = audio
     return updated

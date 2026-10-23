@@ -927,7 +927,13 @@ def render_edl(
         from brand import with_brand_ranges
 
         edl = with_brand_ranges(edl, theme)
-    from audio import attach_sfx
+    from audio import (
+        MusicError,
+        apply_music_policy,
+        attach_sfx,
+        load_music_manifest,
+        timeline_duration,
+    )
 
     sfx_cfg = theme.sfx or {}
     sfx_root = Path(__file__).resolve().parents[1] / "brand" / "sfx"
@@ -943,6 +949,26 @@ def render_edl(
         manifest_path=sfx_root / "manifest.json",
         root=sfx_root,
     )
+    music_dir = Path(__file__).resolve().parents[1] / "brand" / "music"
+    music_manifest_path = music_dir / "manifest.json"
+    if music_manifest_path.is_file():
+        try:
+            music_manifest = load_music_manifest(music_manifest_path)
+        except MusicError as exc:
+            sys.exit(str(exc))
+    else:
+        music_manifest = {"enabled": False, "beds": []}
+    try:
+        edl = apply_music_policy(
+            edl,
+            edit_dir,
+            theme.music or {},
+            music_manifest,
+            music_dir,
+            timeline_duration(edl),
+        )
+    except MusicError as exc:
+        sys.exit(str(exc))
     (edit_dir / "edl.resolved.json").write_text(json.dumps(edl, indent=2))
     style_id = resolve_caption_style(edl, theme)
     language = (

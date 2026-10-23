@@ -66,9 +66,11 @@ class AttackAndGraphTests(unittest.TestCase):
             voice_sample_rate=48000,
             voice_input=0,
         )
-        self.assertIn(r"between(t\,1.000\,5.000)", graph)
+        self.assertIn(r"between(t\,1.000\,1.080)", graph)
+        self.assertIn(r"between(t\,1.080\,5.000)", graph)
+        self.assertIn("0.223872", graph)
+        self.assertNotIn("sidechaincompress", graph)
         self.assertIn("normalize=0", graph)
-        self.assertIn("volume=", graph)
 
     def test_mix_command_copies_video(self):
         cmd = audio.mix_command(
