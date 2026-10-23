@@ -132,17 +132,12 @@ def _encode(frames: list, path: Path, fps: float) -> None:
         "-movflags", "+faststart",
         str(path),
     ]
-    proc = subprocess.Popen(
-        cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
+    blob = b"".join(frame.tobytes() for frame in frames)
+    proc = subprocess.run(
+        cmd, input=blob, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=False
     )
-    assert proc.stdin is not None
-    for frame in frames:
-        proc.stdin.write(frame.tobytes())
-    proc.stdin.close()
-    err = proc.stderr.read() if proc.stderr is not None else b""
-    code = proc.wait()
-    if code != 0:
-        raise RuntimeError(err.decode("utf-8", "replace")[-800:])
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.decode("utf-8", "replace")[-800:])
 
 
 def _rgb(hex_color: str) -> tuple[int, int, int]:

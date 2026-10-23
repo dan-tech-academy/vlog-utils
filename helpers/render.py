@@ -927,6 +927,22 @@ def render_edl(
         from brand import with_brand_ranges
 
         edl = with_brand_ranges(edl, theme)
+    from audio import attach_sfx
+
+    sfx_cfg = theme.sfx or {}
+    sfx_root = Path(__file__).resolve().parents[1] / "brand" / "sfx"
+    edl = attach_sfx(
+        edl,
+        edit_dir,
+        preset=str(sfx_cfg.get("preset") or "generated"),
+        intro_join=str(sfx_cfg.get("intro_join") or "transition"),
+        optional=bool(sfx_cfg.get("optional", False)),
+        min_gap=float(sfx_cfg.get("max_gap_s", 1.5)),
+        span=float(sfx_cfg.get("span_s", 20)),
+        max_in_span=int(sfx_cfg.get("max_in_span", 8)),
+        manifest_path=sfx_root / "manifest.json",
+        root=sfx_root,
+    )
     (edit_dir / "edl.resolved.json").write_text(json.dumps(edl, indent=2))
     style_id = resolve_caption_style(edl, theme)
     language = (
