@@ -4,7 +4,7 @@ Planning document only. No feature work is in this change.
 
 - Repo: `dan-tech-academy/video-use` (fork of browser-use/video-use)
 - Branch: `feat/dantech-brand-and-media-upgrade`
-- Date: 2026-10-23
+- Date: 2026-10-23. Revised the same day after a Gemini and Vbee review (section 5.1, decisions 6.1 and 6.4). The TTS and STT defaults did not change.
 - Audience: Dan Tech (`@dantech0xff`, `@dantech-0xff`) and whoever implements the phases
 
 This plan turns the existing conversation-driven editor into a channel pipeline that can still cut footage and can also generate narrated tech videos. Brand, caption variety, per-segment graphics, sound effects, music, and speech synthesis land in an order where each phase has something real to call.
@@ -277,7 +277,7 @@ These are existing production rules. Phases add behavior around them.
     - Auth from `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION` in `.env`. Same "missing key" behavior as `load_api_key` in `transcribe.py`.
     - Prefer the Speech SDK (`azure-cognitiveservices-speech`) so `synthesis_word_boundary` arrives during a synchronous synth. Microsoft documents those events for Azure Speech voices, and documents that OpenAI voices on the same service do not emit them. Dragon HD Omni documents the payload (`text`, `audio_offset`, `text_offset`).
     - First task of the phase, before any caption wiring: synthesize a 10-second Vietnamese sample and a 10-second English sample, print the raw offset unit, and lock the seconds conversion in a test fixture checked into `tests/fixtures/`. Azure SDK offsets are 100-nanosecond ticks. Do not guess from a blog post if the probe disagrees.
-    - If `vi-VN-HoaiMyNeural` or `vi-VN-NamMinhNeural` omits boundaries, try `vi-VN-Linh:MAI-Voice-2-Flash`, then fall back to forced alignment for that voice only. Alignment is a provider-internal detail. Callers still receive seconds.
+    - If `vi-VN-HoaiMyNeural` or `vi-VN-NamMinhNeural` omits boundaries, try `vi-VN-Linh:MAI-Voice-2-Flash`, then use the commercial snap alignment in section 5.1 for that voice only. Callers still receive seconds. Do not point this fallback at WhisperX's Vietnamese wav2vec2: those weights are CC BY-NC 4.0.
     - Split text on sentence boundaries so each request stays under the real-time 10-minute output cap. Offset later chunks by the running duration. Cache each chunk under `<edit>/audio/tts/<sha256>.wav` plus `.words.json`, keyed by provider, voice, language, style, and text.
     - For mixed lines, allow SSML `<lang xml:lang="en-US">…</lang>` around English product tokens when the narration language is `vi`. The script format in phase 9 can mark those tokens; the adapter must not invent pronunciations.
 
@@ -297,9 +297,7 @@ These are existing production rules. Phases add behavior around them.
 
 - Default extra `tts`: `azure-cognitiveservices-speech`.
 - Dev extra `tts-edge`: `edge-tts`.
-- Not in the default install: Kokoro, Piper, Coqui, F5-TTS, OpenAI, Google client libraries. Add a provider later by implementing `synthesize` and a word-time adapter. The comparison is in section 5; the owner decision is in section 6.
-
-Forced alignment, only if a voice returns bare audio: `faster-whisper` (large-v3, or a Vietnamese model such as PhoWhisper) as an optional extra `align`. It is not a dependency of the Azure path if the probe shows boundaries.
+- Not in the first implementation: `google-genai`, a Vbee client, Kokoro, Piper, Coqui, F5-TTS, OpenAI, WhisperX. Gemini TTS and Vbee return audio only. They become adapters only if decision 6.1 picks them, and each adapter must run the section 5.1 alignment before it returns `words`. The Azure path does not depend on that step if the probe shows boundaries.
 
 **Acceptance:**
 
@@ -315,6 +313,8 @@ Forced alignment, only if a voice returns bare audio: `faster-whisper` (large-v3
 - SDK wheels are large and platform-specific. If the Linux wheel fails in this environment, switch the adapter to batch synthesis (`wordBoundaryEnabled`) and keep the same output shape. Batch is slower and asynchronous; the cache hides that on the second run.
 - Voice quality is a listening decision. The phase is done when the contract works, not when the voice is "the" Dan Tech voice. Leave the chosen id in `speech.json` after the owner listens.
 - Do not route TTS through `manim-voiceover`. That plugin is Manim-only and its examples default to ElevenLabs.
+
+**Gemini and Vbee, after the 2026-10-23 review.** The default for this phase stays Azure, with edge-tts as the dev fallback. Do not add a Gemini or Vbee adapter in the first implementation. Both can speak Vietnamese, and neither returns word boundaries (section 5.1). Shipping either one means the alignment step ships in the same change, because captions and the EDL consume `words`. Scribe stays the footage transcriber. `gemini-3.5-transcribe` is the hosted STT fallback in decision 6.4, not a replacement that this phase has to build.
 
 ### Phase 4 — Audio timeline and mix foundation
 
@@ -697,7 +697,7 @@ Reasons that are specific to this repo:
 - A 10-minute video is well inside the free monthly character grant while the pipeline is being built. Paid cost stays in cents per video at the historical neural rate.
 - Integration is a Python extra on top of `requests`-era install. No GPU on the render machine. The heavy local models also need an aligner, so they are two new systems rather than one.
 
-Use Google Chirp 3 HD as the planned alternate if a blind listening test prefers it for Vietnamese. The adapter would synth phrase by phrase and align. Do not make it the default until that aligner is part of the same phase, because captions are the product.
+Gemini TTS, Vbee, and Chirp 3 HD were re-checked in section 5.1. They are listening-test challengers, not the default. Each one returns audio without word boundaries, so a caption-safe adapter has to add the alignment step in that section. Chirp 3 HD is the weaker of the three Google options for this repo: Gemini 3.8 Flash TTS is the current Google speech model, and Chirp's published SSML tag list still has no `<mark>`.
 
 Use Kokoro later as an optional local English preview provider if Azure latency or cost ever matters. It is not the default, because this channel asked for Vietnamese and English together.
 
@@ -705,9 +705,94 @@ Leave XTTS and F5-TTS off the implementation list for published videos. The weig
 
 OpenAI is a poor default for a pipeline we will still be running after 2027-01-06, and it does not return word times. Revisit only if a future speech model on that API grows timestamps and a Vietnamese locale voice.
 
-Scribe stays the footage STT. Replacing it is not required for any phase above. `SKILL.md` already rejects local Whisper on CPU as the footage transcriber because it is slow and it normalizes fillers.
+Scribe stays the footage STT. Section 5.1 compares it with Gemini 3.5 Transcribe, Vbee STT, and WhisperX. Replacing it is not required for any phase above. `SKILL.md` already rejects local Whisper on CPU as the footage transcriber because it is slow and it normalizes fillers.
 
-Voice cloning (Azure personal voice, or a MIT local cloner such as Chatterbox for English) is out of these phases. Add it as another `synthesize()` implementation after the stock voice is in production and the owner has a consent recording he is willing to ship.
+Voice cloning (Azure personal voice, Gemini 3.8 voice replication, or a MIT local cloner such as Chatterbox for English) is out of these phases. Add it as another `synthesize()` implementation after the stock voice is in production and the owner has a consent recording he is willing to ship.
+
+### 5.1 Gemini and Vbee (reviewed 2026-10-23)
+
+This pass used the vendor pages linked at the end of the section. Two Google surfaces are easy to mix up. **Gemini TTS** (`gemini-3.8-flash-tts` and the older preview ids) is a generative speech model: text in, audio out. **Gemini 3.5 Transcribe** (`gemini-3.5-transcribe`) is the speech-to-text model. **Cloud TTS Chirp 3 HD** is a third product, priced per character, and it is not Gemini TTS. Prompting a general Gemini model to "transcribe this" is not the transcription API. The structured word offsets live on `gemini-3.5-transcribe`.
+
+#### TTS
+
+| | Azure neural (default) | edge-tts (dev fallback) | Gemini 3.8 Flash TTS | Gemini 2.5 Flash / Pro preview TTS | Cloud Chirp 3 HD | Vbee |
+| --- | --- | --- | --- | --- | --- | --- |
+| Vietnamese | Dedicated `vi-VN` voices: `vi-VN-HoaiMyNeural`, `vi-VN-NamMinhNeural`, plus `vi-VN-Linh:MAI-Voice-2-Flash`. SSML `<lang>` for an English token inside a Vietnamese line. | Same Azure voice names. | Vietnamese is in the 130-language list for `gemini-3.8-flash-tts` (and the 100-language list for Flash-Lite). Voices are prebuilt personas (`Kore`, `Puck`, …) plus a language-filterable library, not a published `vi-VN-*` locale voice. Style is a prompt, not SSML. Inline English tags are what Google says to use for non-speech events. | Older preview ids (`gemini-2.5-flash-preview-tts`, `gemini-2.5-pro-preview-tts`). Superseded for new work by 3.8. | `vi-VN` is a listed Chirp 3 HD language, with the shared speaker names (`Leda`, `Charon`, …). | Vietnamese specialist. Realtime docs currently list Northern and Southern voices: HN Ngọc Huyền, HN Mai Phương, SG Tường Vy, SG Lan Trinh, SG Thảo Trinh. Speed and punctuation pauses are request fields. English is a separate language in their help center, not an SSML island inside a Vietnamese sentence. |
+| Word times | SDK `synthesis_word_boundary` for Azure voices. Offsets are 100 ns ticks. Probe the vi-VN voices before captions depend on them. | Stream `WordBoundary` messages (offset and duration). | None. Docs: TTS models "generate audio-only outputs." A 2026-09-30 API report found `audioTranscriptionConfig.wordTimestamp` ignored on 2.5, 3.1, and 3.8. | None. Same audio-only contract. | No `<mark>` in the published Chirp 3 HD SSML tag list, so no mark timepoints. | None. Realtime returns audio bytes. Batch returns a short-lived `audio_link`. The JSON has `characters` and `status`, not word offsets. |
+| Cost, about 10 minutes / ~12,000 characters | Free tier 0.5M characters/month, then the calculator rate. Historical public list price about $16/1M, which would be about $0.19, timestamps included. Confirm before budgeting. | $0 | Paid standard tier through 2026-12-31: audio output $9/1M tokens, and audio is 25 tokens/second, which Google equates to $0.00225 per 10 seconds, so about $0.135 for 10 minutes. Text input is $0.50/1M tokens and is cents on a script. From 2027-01-01 the audio output price doubles ($18/1M, about $0.27 for 10 minutes). Alignment is extra (below). | 2.5 Flash preview: $0.50/1M text in, $10/1M audio out. 2.5 Pro preview: $1 and $20. Same 25 tokens/second. | $30/1M characters after 1M free/month, about $0.36 for 12,000 characters, and still no word times. | No public per-character API rate. The pricing page sends enterprise API buyers to a quote. A yearly Standard card has been listed at 29,000 VND/month for 250,000 characters/month, with a parenthetical 125,000; re-check the live card. From 2026-01-30 the free plan cannot call the API, non-VIP+ paid plans may spend at most half their quota on the API, and VIP+ may spend all of it. |
+| Limits | Real-time synthesis is on the order of 10 minutes per request, so long scripts are chunked. | Undocumented. The endpoint can change or throttle without notice. | 8,192 input tokens and 16,384 output tokens per request. At 25 tokens/second that output cap is about 655 seconds of audio, so a long video is still chunked. RPM/TPM/RPD are per project in AI Studio, and Google says they are not a guarantee. | Preview quotas are tighter than current models. | 5,000 bytes per classic request. Chirp SSML is a subset and is synchronous-only for the tags they list. | Realtime TTS: 300 characters, first chunk around 500 ms. Batch TTS: 100,000 characters, async, webhook or poll. Concurrent overflow returns `TTS_CCR_MAX_LIMIT_REACHED` (429). Extra concurrent streams were priced at 100,000 VND per 5 streams on the custom plan. |
+| Stability | GA neural voices. | Unofficial client of the Edge read-aloud service. | `gemini-3.8-flash-tts` is the model the speech guide tells you to call (model page updated September 2026). The Cloud TTS price card still labels "Gemini 3.8 Flash TTS (Preview)" and posts a price change on 2027-01-01. 2.5 and 3.1 ids are explicitly preview. | Preview. | GA Chirp 3 HD voices. | Two API generations. New calls should use `https://api.vbee.vn/v1/tts`. The older `https://vbee.vn/api/v1/tts` docs are labeled legacy. |
+| YouTube / commercial | Azure speech terms. A normal paid speech resource covers a monetized channel. | No contract. | Paid Gemini API: Google does not claim ownership of generated content, and paid-tier prompts and responses are not used to improve Google's models. Free-tier usage is. Obey the Prohibited Use Policy. That is a usable commercial grant. It is not a dedicated "YouTube monetization" clause. Voice replication additionally needs consent audio. | Same Gemini API terms. Preview models are a weak thing to build a channel on. | Google Cloud TTS terms. | Help center and FAQ say converted audio may be posted to YouTube and used commercially. Terms section 4.2 is a limited, non-exclusive, non-transferable, revocable license to use library voices. The customer does not own those voices. Vbee warrants the library voice itself, not the customer's script. Use a paid plan, because the free plan has no API. |
+| Python integration | `azure-cognitiveservices-speech`, or batch REST if the wheel is painful. One call returns audio and boundaries. | `pip install edge-tts`. One call returns audio and boundaries. | `google-genai` or REST. One call returns WAV (24 kHz) or raw PCM. A second call is required for times. | Same, older request shape (stage directions lived in the transcript; 3.8 moved them to `speech_metadata`). | `google-cloud-texttospeech` or REST. SSML marks on Neural2, not on this tier. | `requests`. Bearer token plus `App-Id`. Batch audio links expire after 3 minutes and the file is kept 3 days, so the CLI downloads immediately and polls Get Request. No public webhook is required if Get Request is polled. |
+
+Naturalness is not settled by these pages. Vbee is the only option here whose product is Vietnamese regional voices. Gemini 3.8 is the one with prompt-level delivery control and a large multilingual list. Azure is the one whose vi-VN voices are boring in the documentation and precise in the timestamp contract. The listening test is still 60 seconds of the same script on Azure, Vbee (Ngọc Huyền or Mai Phương), and one Gemini 3.8 voice filtered to Vietnamese. The winner does not become the default unless it can also feed `words`.
+
+#### What alignment costs if Gemini or Vbee wins the listen test
+
+Gemini TTS and Vbee do not emit word boundaries. The caption and EDL path cannot start until something else assigns `start` and `end` in seconds.
+
+Local forced alignment is the wrong default for a monetized Vietnamese video:
+
+- WhisperX (BSD-2-Clause code) aligns with a language-specific wav2vec2 model. Its Vietnamese entry is `nguyenvulebinh/wav2vec2-base-vi-vlsp2020`. That model card licenses the parameters as CC BY-NC 4.0.
+- `ctc-forced-aligner` is also BSD-2-Clause, and its README says the default MMS checkpoint is CC BY-NC 4.0 and must be swapped for commercial use. A commercially licensed Vietnamese CTC checkpoint is not sitting in the default WhisperX table.
+- The MIT English aligner (`WAV2VEC2_ASR_BASE_960H` via torchaudio) does not model Vietnamese tones. It is a reasonable offline fallback for English narration only.
+- Whisper-style ASR on CPU is already an anti-pattern in `SKILL.md` for footage, because it is slow and it normalizes fillers. Using it as the timer for TTS has the same text-drift problem, plus a GPU.
+
+The alignment step that stays inside commercial terms, and does not add a GPU:
+
+1. Synthesize the script to WAV. Chunk at a sentence boundary under the provider cap (about 655 seconds for Gemini 3.8; 300 characters if someone insists on Vbee realtime; otherwise one Vbee batch job up to 100,000 characters, downloaded before the link expires).
+2. Send each chunk to `gemini-3.5-transcribe` with verbatim mode, `timestamp_granularities: ["word"]`, and `language_codes` set to `vi-VN` or `en-US`. Leave SMART off. SMART deletes fillers and cannot be combined with timestamps. Leave `custom_vocabulary` off. The API rejects it together with timestamps.
+3. Snap those recognized words onto the known script with a monotonic alignment. The script text is what the captions show. The recognizer only donates times. Parse `start_offset` / `end_offset` strings such as `"0.100s"` into seconds, then add the chunk offset.
+4. If a script token does not match, especially an English product name or a tone-marked syllable, do not invent a time. Re-synthesize that sentence alone and retry once, then fail the line with the mismatched pair.
+5. Return the same `{type, text, start, end}` list every other provider returns.
+
+Cost of step 2, from the Gemini pricing page: `gemini-3.5-transcribe` paid tier is $2.00/1M audio input tokens ($0.003/min) plus $12.00/1M text output tokens ($0.002/min), and Google's blended estimate is about $0.005 per minute. Ten minutes adds about $0.05. Added to Gemini 3.8 synthesis that is about $0.19 for a 10-minute video through 2026-12-31, and about $0.32 from 2027-01-01. Vbee synthesis is a VND character pack on top of that same $0.05, because Vbee still would not be the clock.
+
+Complexity is one extra HTTP call per chunk, one diff function, and a fixture. It is not a new render stage. It is also a second model that Google warns is less accurate when word timestamps are turned on. Clean single-speaker TTS is an easier recording than a noisy take, and the known script catches rewrites, but it remains two failure modes against Azure's one.
+
+#### Transcription, if Scribe were replaced
+
+The repo posts `model_id: scribe_v1` today. The live ElevenLabs price card is **Scribe v2 at $0.22 per hour** (realtime $0.39/hour; keyterm prompting +$0.05/hour). The adapter, when it is written, should confirm `scribe_v1` still returns `words[]` and otherwise move to `scribe_v2` without changing the fields `render.py` and `pack_transcripts.py` already read: `type`, `text`, `start`, `end`, `speaker_id`, plus `audio_event` tokens.
+
+| | Scribe v2 (default) | Gemini 3.5 Transcribe (hosted fallback) | Vbee STT | WhisperX (offline, limited) |
+| --- | --- | --- | --- | --- |
+| Word times | `timestamps_granularity: word` or `character`. This is the shape the EDL already uses. | Yes, on the file model only. `word_info.start_offset` / `end_offset`. Live streaming does not support word timestamps. Google's own note: enabling word timestamps may degrade transcription accuracy. | No. Realtime and batch both return `utterances[]` with `text`, `startTime`, `endTime` in seconds. That is a phrase, not a word. | Yes, after a wav2vec2 alignment pass. Utterance times from Whisper alone are the inaccurate ones WhisperX exists to replace. |
+| Diarization | `diarize: true`, up to 32 speakers. | Up to 8 speakers on the file model. Attribution for 3 or more is experimental. Incompatible with custom vocabulary. | Not in the documented response. No speaker field. | Optional pyannote pass. A separate model, with its own license and a Hugging Face gate. Not part of the default install. |
+| Fillers, pauses, laughter | Verbatim words, and `tag_audio_events` for tokens such as `(laughter)` and `(applause)` with their own times. `pack_transcripts.py` already keeps `audio_event` entries. | Verbatim mode keeps filler words, repetitions, pauses, and false starts in the text. SMART strips them and cannot carry timestamps. There is no documented non-speech event channel for laughter or applause. | Plain utterance text. No event tags in the schema. | Whisper text, which the skill already treats as filler-normalized. No laughter channel. |
+| Vietnamese and mixed English | 90+ languages on the price card. The current client can pass `language_code`. Code-switching still needs a real take to judge. | `vi-VN` is listed. Auto detection covers 85+ languages and intra-sentence code-switching. Custom vocabulary would help product names and cannot be combined with word timestamps or diarization, which is the setting this pipeline needs. | Built for Vietnamese. Docs do not describe mixed English tech terms or a bias list. | Whisper knows Vietnamese. The stock aligner for `vi` is the NC model above, so a published Vietnamese job would be stuck with Whisper's looser word times. |
+| Cost | $0.22 per audio hour. Ten minutes is about $0.037. | About $0.005 per minute, about $0.30 per hour, about $0.05 for ten minutes. Free tier exists; paid tier is the one that does not train on the audio. | Billed from `audioDurationSeconds` (rounded up). No public VND-per-minute rate on the API docs or the pricing page. | Local GPU time. $0 marginal, plus the weight license. |
+| Limits | Large uploads (the convert API documents multi-GB files). Batch, not a 10-second cap. | File model: 1 hour, cut to 30 minutes when diarization or word timestamps are on. A long take is chunked, with care at the seams. | Realtime: WAV under 10 seconds and 10 MB. Batch: WAV under 100 MB, async, help center says up to 4 hours to finish. Streaming is a separate WebSocket capped at 90 seconds. | GPU memory on the order of several GB for a large Whisper model. |
+| Stability | GA. The repo's `scribe_v1` id is the part to re-check, not the product. | `gemini-3.5-transcribe`, model page updated August 2026. A dedicated STT model, not a preview TTS id. | Documented current API under `/v1/stt`, with a legacy TTS surface beside it. STT results are async unless the clip is under 10 seconds. | Research project. The aligner table moves, and the Vietnamese weights are NC. |
+| Commercial use | ElevenLabs API terms on a paid plan. The transcription is of the owner's footage. | Same paid-tier Gemini grant as TTS. Use a billed project so footage is not used to improve Google's models. | Same Vbee license as TTS for the service. The transcript is the owner's words. The missing word times are what blocks it, not the license. | Code is BSD-2-Clause. The Vietnamese acoustic model is not. |
+
+#### Sources
+
+- Gemini speech guide: https://ai.google.dev/gemini-api/docs/speech-generation
+- Gemini 3.8 Flash TTS model: https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash-tts
+- Gemini API pricing (3.8 TTS and 3.5 Transcribe): https://ai.google.dev/gemini-api/docs/pricing
+- Gemini rate limits: https://ai.google.dev/gemini-api/docs/rate-limits
+- Gemini API additional terms (generated content, paid vs free data use): https://ai.google.dev/gemini-api/terms
+- Gemini 3.5 Transcribe guide, including the verbatim/SMART split and the word-timestamp accuracy note: https://ai.google.dev/gemini-api/docs/transcribe
+- Gemini 3.5 Transcribe model card (30-minute cap, diarization, `vi-VN`): https://ai.google.dev/gemini-api/docs/models/gemini-3.5-transcribe
+- Developer report that TTS `wordTimestamp` is ignored, 2026-09-30: https://discuss.ai.google.dev/t/feature-request-word-character-timestamps-for-gemini-tts-output-caption-sync/186189
+- Cloud TTS prices, including Chirp 3 HD at $30/1M and Gemini 3.8 Flash TTS marked Preview: https://cloud.google.com/text-to-speech/pricing
+- Chirp 3 HD languages and SSML tags: https://docs.cloud.google.com/text-to-speech/docs/chirp3-hd
+- Azure voices, including `vi-VN`: https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support
+- Azure pricing (free 0.5M neural characters; paid figures redacted on the page): https://azure.microsoft.com/en-us/pricing/details/speech/
+- Vbee realtime TTS: https://api-docs.vbee.vn/vbee-api/text-to-speech/realtime-api
+- Vbee batch TTS: https://api-docs.vbee.vn/vbee-api/text-to-speech/batch-api
+- Vbee realtime STT: https://api-docs.vbee.vn/vbee-api/speech-to-text/realtime-api
+- Vbee batch STT: https://api-docs.vbee.vn/vbee-api/speech-to-text/batch-api
+- Vbee API changes, May 2026 (100,000-character batch, 10-second realtime STT, 100 MB batch STT): https://help.vbee.vn/docs/thong-bao/ban-cap-nhat-thang-04-2026
+- Vbee API quota split, January 2026: https://help.vbee.vn/docs/thong-bao/ban-cap-nhat-thang-01-2026
+- Vbee commercial use, including YouTube: https://help.vbee.vn/docs/gioi-thieu and https://help.vbee.vn/docs/faq
+- Vbee terms, section 4.2: https://policy.vbee.vn/chinh-sach-va-dieu-khoan/dieu-khoan-su-dung-dich-vu-vbee-aivoice
+- Vbee pricing (enterprise API is a quote): https://vbee.vn/pricing
+- ElevenLabs API prices (Scribe v2 $0.22/hour): https://elevenlabs.io/pricing/api
+- ElevenLabs convert API (`tag_audio_events`, `diarize`, `timestamps_granularity`): https://elevenlabs.io/docs/api-reference/speech-to-text/convert
+- WhisperX: https://github.com/m-bain/whisperX
+- Vietnamese aligner license: https://huggingface.co/nguyenvulebinh/wav2vec2-base-vi-vlsp2020
+- ctc-forced-aligner license note: https://github.com/MahmoudAshraf97/ctc-forced-aligner
 
 ## 6. Open decisions
 
@@ -715,19 +800,25 @@ Each one blocks a specific phase. None of them block writing phase 1's schema.
 
 ### 6.1 Which TTS provider is the default?
 
+Compared in section 5.1 with current vendor pages. The pipeline need that decides this is word-level timing, not raw naturalness.
+
 | Option | What you get |
 | --- | --- |
-| A. Azure standard neural | Locale voices for Vietnamese and English, word-boundary events, commercial terms, free tier for development. Recommended. |
-| B. Google Chirp 3 HD | Strong HD voices including `vi-VN`, higher published price, no mark-level timestamps in the current SSML list, so we add an aligner. |
-| C. Google Neural2 | $16/1M published, `vi-VN` voices, mark timepoints, a step down in naturalness from Chirp. |
-| D. OpenAI speech models | Easy HTTP, English-first voices, no word times, current model ids shut down 2027-01-06. |
-| E. edge-tts | $0 and the Azure voice names, unofficial endpoint. Dev only. |
-| F. Kokoro or Piper locally | $0 and offline. Official Kokoro has no Vietnamese. Piper's Vietnamese quality and per-voice licenses are the problem. GPL-3.0 on the maintained Piper engine. |
-| G. XTTS or F5-TTS | Cloning quality, non-commercial weights. Not for this channel. |
+| A. Azure standard neural | Locale `vi-VN` and `en-US` voices, word-boundary events, commercial terms, 0.5M free characters/month. Recommended default. |
+| B. Vbee | The Vietnamese-specialist voices (Northern and Southern). Paid plans may be posted to YouTube. Batch handles a full script (100,000 characters) and returns audio only. Realtime is 300 characters. Word times require the section 5.1 alignment. Listening-test challenger, not the default. |
+| C. Gemini 3.8 Flash TTS | Current Google speech model, Vietnamese in the language list, prompt-style control, about $0.135 of audio for 10 minutes through 2026-12-31. Audio-only response. Same alignment step. Paid-tier commercial grant. Cloud's price card still says Preview and doubles the audio price on 2027-01-01. Second listening-test challenger. |
+| D. Gemini 2.5 Flash / Pro preview TTS | Older preview ids. No word times. Do not start new work here. 3.8 replaces them. |
+| E. Google Chirp 3 HD | `vi-VN` HD voices at $30/1M characters. Published SSML list has no `<mark>`. Weaker fit than C for this repo. |
+| F. edge-tts | $0, the Azure voice names, and WordBoundary events. Unofficial endpoint. Dev fallback only. |
+| G. Google Neural2 | $16/1M and SSML mark timepoints, with less naturalness than Chirp or Gemini TTS. |
+| H. OpenAI speech models | No word times. Current speech model ids shut down 2027-01-06. |
+| I. Kokoro, Piper, XTTS, F5-TTS | Unchanged from section 5. Official Kokoro has no Vietnamese. XTTS and F5 weights are non-commercial. |
 
-**Recommendation:** A, with E as a dev fallback behind the same interface, and B as the listening-test challenger. Phase 3 ships A and E. B is a later adapter only if you prefer the Chirp sample.
+**Recommendation:** Default A. Dev fallback F, behind the same `synthesize()` interface, and only when no Azure key is present. Phase 3 ships A and F.
 
-**Needs from you:** an Azure Speech resource key and region, or a "use edge-tts until I have one". And a 60-second listen of `vi-VN-HoaiMyNeural`, `vi-VN-NamMinhNeural`, and one English voice (`en-US-AndrewNeural` is only a placeholder) before `speech.json` is treated as final.
+If a 60-second listen prefers B or C, that provider can replace A only together with the section 5.1 snap alignment (`gemini-3.5-transcribe` word offsets, then a monotonic match back to the script). Do not ship the nicer voice first and leave captions on sentence guesses. WhisperX is not that alignment step for Vietnamese: the stock `vi` acoustic model is CC BY-NC 4.0.
+
+**Needs from you:** an Azure Speech key and region, or "use edge-tts until I have one". Optional: a Vbee app id and a Gemini API key on a billed project, so the listening test is real audio rather than a doc comparison. Listen to `vi-VN-HoaiMyNeural`, `vi-VN-NamMinhNeural`, one Vbee Northern voice, and one Gemini 3.8 Vietnamese-library voice on the same paragraph, including an English product name, before `speech.json` is treated as final.
 
 ### 6.2 Vietnamese, English, or both?
 
@@ -754,12 +845,18 @@ Each one blocks a specific phase. None of them block writing phase 1's schema.
 
 ### 6.4 Keep Scribe for footage?
 
+Section 5.1 has the full comparison. Short version: Gemini now has a real transcribe model with word offsets, and Vbee has an STT API. Neither one replaces what this editor reads from Scribe.
+
 | Option | Consequence |
 | --- | --- |
-| A. Keep Scribe | Diarization, audio events, verbatim fillers, the cache you already have. Recommended. |
-| B. Replace with local Whisper / PhoWhisper | Drops the ElevenLabs key for footage. Loses the filler and audio-event behavior the skill is built around, and CPU Whisper is already listed as an anti-pattern. |
+| A. Keep Scribe | Word or character times, diarization up to 32 speakers, `tag_audio_events` for `(laughter)` and the other non-speech tokens `pack_transcripts.py` already keeps, verbatim fillers. Scribe v2 is $0.22 per hour. Recommended default. The repo still posts `scribe_v1`; the adapter confirms that id or moves to v2 without changing the word schema. |
+| B. Gemini 3.5 Transcribe | Hosted fallback if the ElevenLabs key goes away. `vi-VN`, code-switching, verbatim fillers, word offsets, diarization up to 8 (3+ experimental), about $0.005/minute on a billed project. Use verbatim, not SMART. Gaps that matter here: no documented laughter/applause event channel, a 30-minute cap once timestamps or diarization are on, a warning that timestamps can hurt accuracy, and custom vocabulary cannot be combined with either feature. |
+| C. Vbee STT | Vietnamese ASR exists. Realtime is WAV under 10 seconds. Batch is WAV under 100 MB and can take hours. Times are per utterance, not per word. No speaker field and no audio-event field in the documented JSON. No public per-minute price. Not a fallback for this EDL. |
+| D. WhisperX locally | Drops the key and needs a GPU. English word alignment can use the MIT wav2vec2 bundle. The Vietnamese aligner WhisperX selects is CC BY-NC 4.0, so a monetized Vietnamese edit would keep Whisper's looser times. No laughter channel, and the skill already rejects CPU Whisper because it normalizes fillers. Offline English fallback only. |
 
-**Recommendation:** A. TTS work does not require touching Scribe. If you want the key gone anyway, that is a separate project with its own accuracy check on a real take.
+**Recommendation:** Default A. Fallback B, as a second `transcribe()` adapter, built only if you want the ElevenLabs key gone. C does not feed cut points. D is not the Vietnamese footage path.
+
+TTS work does not require this change. A Gemini or Vbee *voice* still uses `gemini-3.5-transcribe` as a timer on its own WAV (section 5.1). That timer is not the footage transcriber, and it does not delete Scribe.
 
 ### 6.5 Music source and license
 
@@ -831,7 +928,7 @@ No other placement is worth a fork in the code. Per-video voice or language over
 
 1. You answer 6.1 (provider), 6.2 (language), and 6.7 (colors and logo, even roughly). The rest have recommendations that can ship as defaults.
 2. Phase 1, then 2. Footage captions can use the new styles before any TTS key exists.
-3. Phase 3 probe (the 10-second boundary dump) before the rest of phase 3. If the Vietnamese voice does not emit boundaries, the plan's fallback is already written; we do not discover it after captions are wired.
+3. Phase 3 probe (the 10-second boundary dump) before the rest of phase 3. If the Vietnamese Azure voice does not emit boundaries, use the section 5.1 snap alignment. Do not use WhisperX's Vietnamese wav2vec2 for that fallback.
 4. Phases 4, then 5 and 6. Phase 5 and phase 6 can be split across two changes; 6 depends on 5's safe rect.
 5. Phases 7 and 8 after the asset decisions 6.5 and 6.6. The code can land with test tones earlier.
 6. Phase 9 last, then one real script rendered end to end and listened to. The self-eval numbers go into `project.md` for that session.
