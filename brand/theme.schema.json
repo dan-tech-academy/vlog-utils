@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dan-tech-academy.github.io/video-use/brand/theme.schema.json",
+  "title": "Dan Tech channel theme",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["channel", "colors", "fonts", "captions", "frame"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "properties": {
+        "placeholders": {"type": "boolean"},
+        "note": {"type": "string"}
+      }
+    },
+    "channel": {
+      "type": "object",
+      "required": ["name", "handles", "handle"],
+      "properties": {
+        "name": {"type": "string"},
+        "handles": {
+          "type": "array",
+          "items": {"type": "string"},
+          "minItems": 1
+        },
+        "handle": {"type": "string"}
+      }
+    },
+    "colors": {
+      "type": "object",
+      "required": ["background", "surface", "text", "textMuted", "accent"],
+      "properties": {
+        "background": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+        "surface": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+        "text": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+        "textMuted": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+        "accent": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+        "accentAlt": {"type": ["string", "null"], "pattern": "^#[0-9A-Fa-f]{6}$"}
+      }
+    },
+    "fonts": {
+      "type": "object",
+      "required": ["display", "body", "mono"],
+      "additionalProperties": {
+        "type": "object",
+        "required": ["family", "file", "weight"],
+        "properties": {
+          "family": {"type": "string"},
+          "file": {"type": "string"},
+          "weight": {"type": "integer"}
+        }
+      }
+    },
+    "captions": {
+      "type": "object",
+      "required": ["default", "margin_v"],
+      "properties": {
+        "default": {
+          "enum": ["bold-overlay", "sentence", "karaoke", "terminal", "emphasis"]
+        },
+        "margin_v": {"type": "integer", "minimum": 0}
+      }
+    },
+    "frame": {
+      "type": "object",
+      "required": ["width", "height", "fps", "mode"],
+      "properties": {
+        "width": {"type": "integer", "minimum": 1},
+        "height": {"type": "integer", "minimum": 1},
+        "fps": {"type": "number", "exclusiveMinimum": 0},
+        "mode": {"enum": ["source", "force"]}
+      }
+    },
+    "watermark": {"type": "object"},
+    "lower_third": {"type": "object"},
+    "intro": {"type": "object"},
+    "outro": {"type": "object"},
+    "sfx": {"type": "object"},
+    "music": {"type": "object"}
+  }
+}

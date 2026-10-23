@@ -1,0 +1,82 @@
+{
+  "meta": {
+    "placeholders": true,
+    "note": "Colors are placeholders, not the final Dan Tech palette. Watermark and intro stay off until a logo file is present. Fonts are OFL: Be Vietnam Pro and JetBrains Mono, licensed in brand/fonts/."
+  },
+  "channel": {
+    "name": "Dan Tech",
+    "handles": ["@dantech0xff", "@dantech-0xff"],
+    "handle": "@dantech0xff"
+  },
+  "colors": {
+    "background": "#0B0F14",
+    "surface": "#141A22",
+    "text": "#F4F7FB",
+    "textMuted": "#9AA6B2",
+    "accent": "#3EE0B0",
+    "accentAlt": "#7AA2FF"
+  },
+  "fonts": {
+    "display": {
+      "family": "Be Vietnam Pro",
+      "file": "brand/fonts/BeVietnamPro-Bold.ttf",
+      "weight": 700
+    },
+    "body": {
+      "family": "Be Vietnam Pro",
+      "file": "brand/fonts/BeVietnamPro-Regular.ttf",
+      "weight": 400
+    },
+    "mono": {
+      "family": "JetBrains Mono",
+      "file": "brand/fonts/JetBrainsMono-Regular.ttf",
+      "weight": 400
+    }
+  },
+  "captions": {
+    "default": "bold-overlay",
+    "margin_v": 90
+  },
+  "frame": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "mode": "source"
+  },
+  "watermark": {
+    "file": "brand/logo.png",
+    "enabled": false,
+    "corner": "top-right",
+    "width_px": 160,
+    "margin_px": 36,
+    "opacity": 0.85
+  },
+  "lower_third": {
+    "enabled": false,
+    "name": "Dan Tech",
+    "handle": "@dantech0xff",
+    "duration_s": 4.0,
+    "at": "first-speech"
+  },
+  "intro": {
+    "enabled": false,
+    "duration_s": 2.5,
+    "title": null
+  },
+  "outro": {
+    "enabled": false,
+    "duration_s": 3.5,
+    "lines": ["Dan Tech", "@dantech0xff"]
+  },
+  "sfx": {
+    "optional": false,
+    "preset": "generated",
+    "intro_join": "transition",
+    "max_gap_s": 1.5,
+    "max_in_span": 8,
+    "span_s": 20
+  },
+  "music": {
+    "enabled": false
+  }
+}

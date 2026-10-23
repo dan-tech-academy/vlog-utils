@@ -69,6 +69,14 @@ First-time install lives in `install.md` (clone, deps, ffmpeg, skill registratio
 
 Helpers (`helpers/transcribe.py`, `helpers/render.py`, etc.) live alongside this SKILL.md. Resolve their paths relative to the directory containing this file — the skill is typically symlinked at `~/.claude/skills/video-use/` or `~/.codex/skills/video-use/`.
 
+## Channel theme
+
+Dan Tech renders read `brand/theme.json`. A session file `<edit>/theme.json` replaces that file wholesale. Do not deep-merge, and do not invent a second palette in prose.
+
+The committed colors are **placeholders** (`meta.placeholders` is true). They are not the final brand. The on-screen handle is `@dantech0xff`. Watermark and intro stay off until `brand/logo.png` exists and the theme turns them on.
+
+Caption safe-zone margin is `captions.margin_v` (the code default is **90**, including the vertical-video UI). The worked `MarginV=35` example below is historical. Use the theme value. Fonts are the files named in the theme (Be Vietnam Pro and JetBrains Mono, both OFL). A missing font file aborts before ffmpeg.
+
 ## Helpers
 
 - **`transcribe.py <video>`** — single-file Scribe call. `--num-speakers N` optional. Cached.
@@ -185,7 +193,7 @@ Subtitles have three dimensions worth reasoning about: **chunking** (1/2/3/sente
 
 **Worked styles** — pick, adapt, or invent:
 
-**`bold-overlay`** — short-form tech launch, fast-paced social. ~2-word chunks, UPPERCASE, break on punctuation and pauses ≥ 0.3s, grow to 3 words rather than flash a cue < 0.35s (`chunk_words` in `render.py`), Helvetica 18 Bold, white-on-outline, `MarginV=35`. `render.py` ships with this as `SUB_FORCE_STYLE`.
+**`bold-overlay`** — short-form tech launch, fast-paced social. ~2-word chunks, UPPERCASE, break on punctuation and pauses ≥ 0.3s, grow to 3 words rather than flash a cue < 0.35s (`chunk_words` in `render.py`), white-on-outline. `render.py` still ships the historical `SUB_FORCE_STYLE` string for this id (Helvetica 18 Bold). The margin that actually clears the vertical UI is the theme's `captions.margin_v` (**90** in code). Do not copy the `MarginV=35` line below into a new render.
 
 ```
 FontName=Helvetica,FontSize=18,Bold=1,

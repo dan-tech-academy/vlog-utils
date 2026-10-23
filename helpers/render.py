@@ -29,6 +29,12 @@ import sys
 from fractions import Fraction
 from pathlib import Path
 
+_HELPERS_DIR = Path(__file__).resolve().parent
+if str(_HELPERS_DIR) not in sys.path:
+    sys.path.insert(0, str(_HELPERS_DIR))
+
+from theme import KNOWN_CAPTION_STYLES, ThemeError, load_theme
+
 try:
     from grade import get_preset, auto_grade_for_clip  # same directory
 except Exception:
@@ -91,6 +97,56 @@ def resolve_path(maybe_path: str, base: Path) -> Path:
     if p.is_absolute():
         return p
     return (base / p).resolve()
+
+
+def resolve_caption_style(edl: dict, theme) -> str:
+    """Style id from the EDL, otherwise the theme default.
+
+    An EDL with no caption fields stays on ``bold-overlay`` when that is the
+    theme default. An id outside the catalog is an error before ffmpeg runs.
+    """
+    requested = (edl.get("captions") or {}).get("style") or theme.captions_default
+    if requested not in KNOWN_CAPTION_STYLES:
+        raise SystemExit(f"unknown caption style '{requested}'")
+    return requested
+
+
+def force_style_for(style_id: str) -> str:
+    """force_style string for an SRT burn.
+
+    ``bold-overlay`` is the historical ``SUB_FORCE_STYLE`` string. Other
+    catalog styles are burned from an ASS file (see ``captions.py``) and do
+    not use this string.
+    """
+    if style_id == "bold-overlay":
+        return SUB_FORCE_STYLE
+    if style_id not in KNOWN_CAPTION_STYLES:
+        raise SystemExit(f"unknown caption style '{style_id}'")
+    raise SystemExit(
+        f"caption style '{style_id}' is burned from ASS, not force_style"
+    )
+
+
+def scale_filter_for(
+    portrait: bool,
+    draft: bool,
+    frame_mode: str,
+    width: int,
+    height: int,
+) -> str:
+    """ffmpeg scale (and pad) for one segment.
+
+    ``source`` keeps today's long-side scale so footage orientation survives.
+    ``force`` is the generated-plate path: exact theme frame, letterboxed.
+    """
+    if frame_mode == "force" and not draft:
+        return (
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"
+        )
+    if draft:
+        return "scale=-2:1280" if portrait else "scale=1280:-2"
+    return "scale=-2:1920" if portrait else "scale=1920:-2"
 
 
 def resolve_subtitles_path(maybe_path: str, edit_dir: Path) -> Path:
@@ -254,6 +310,8 @@ def extract_segment(
     preview: bool = False,
     draft: bool = False,
     rate: str | None = None,
+    frame_mode: str = "source",
+    frame_size: tuple[int, int] = (1920, 1080),
 ) -> None:
     """Extract a cut range as its own MP4 with grade + 30ms audio fades baked in.
 
@@ -268,10 +326,7 @@ def extract_segment(
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     portrait = is_portrait_source(source)
-    if draft:
-        scale = "scale=-2:1280" if portrait else "scale=1280:-2"
-    else:
-        scale = "scale=-2:1920" if portrait else "scale=1920:-2"
+    scale = scale_filter_for(portrait, draft, frame_mode, frame_size[0], frame_size[1])
 
     vf_parts: list[str] = []
     if is_hdr_source(source):
@@ -320,6 +375,8 @@ def extract_all_segments(
     preview: bool,
     draft: bool = False,
     fps: str | None = None,
+    frame_mode: str = "source",
+    frame_size: tuple[int, int] = (1920, 1080),
 ) -> list[Path]:
     """Extract every EDL range into edit_dir/clips_graded/seg_NN.mp4.
     Returns the ordered list of segment paths.
@@ -373,7 +430,11 @@ def extract_all_segments(
         print(f"  [{i:02d}] {src_name}  {start:7.2f}-{end:7.2f}  ({duration:5.2f}s)  {note}")
         if is_auto:
             print(f"        grade: {seg_filter or '(none)'}")
-        extract_segment(src_path, start, duration, seg_filter, out_path, preview=preview, draft=draft, rate=out_rate)
+        extract_segment(
+            src_path, start, duration, seg_filter, out_path,
+            preview=preview, draft=draft, rate=out_rate,
+            frame_mode=frame_mode, frame_size=frame_size,
+        )
         seg_paths.append(out_path)
 
     return seg_paths
@@ -756,9 +817,25 @@ def main() -> None:
     edit_dir = edl_path.parent
     out_path = args.output.resolve()
 
+    try:
+        theme = load_theme(edit_dir)
+    except ThemeError as exc:
+        sys.exit(str(exc))
+    style_id = resolve_caption_style(edl, theme)
+    if style_id != "bold-overlay":
+        sys.exit(
+            f"caption style '{style_id}' is selected but this render still "
+            "burns bold-overlay. Use the ASS writer once it is wired."
+        )
+    frame_mode = theme.frame_mode
+    if edl.get("plate") or (edl.get("frame") or {}).get("mode") == "force":
+        frame_mode = "force"
+
     # 1. Extract per-segment (auto-grade per range if EDL grade is "auto")
     segment_paths = extract_all_segments(
-        edl, edit_dir, preview=args.preview, draft=args.draft, fps=args.fps
+        edl, edit_dir, preview=args.preview, draft=args.draft, fps=args.fps,
+        frame_mode=frame_mode,
+        frame_size=(theme.frame_width, theme.frame_height),
     )
 
     # 2. Concat → base
