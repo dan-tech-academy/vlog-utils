@@ -321,7 +321,21 @@ Match the source unless the user asked for something specific. Common targets: `
 }
 ```
 
-`grade` is a preset name or raw ffmpeg filter. `overlays` are rendered animation clips. `subtitles` is optional and applied LAST.
+`grade` is a preset name or raw ffmpeg filter. `overlays` are rendered animation clips. `subtitles` is optional and applied LAST. Animation slots stay silent: a whoosh baked into an overlay MP4 is dropped. Put sound on the timeline instead.
+
+EDL version 2 adds an `audio` block (voice stem, SFX events, music). Version 1 files still render with no mix pass. The mix uses `amix=normalize=0`, resamples every stem to 48 kHz, and runs before the final loudnorm. 30 ms fades stay on the voice segments only.
+
+```json
+{
+  "version": 2,
+  "audio": {
+    "voice": {"file": "edit/audio/voice.wav", "start": 0.0},
+    "events": [{"kind": "cut", "at": 4.20}],
+    "sfx": [{"file": "brand/sfx/cut.wav", "at": 4.11, "gain_db": -8}],
+    "music": {"file": "brand/music/bed.wav", "gain_db": -16, "duck_db": -13}
+  }
+}
+```
 
 ## Memory — `project.md`
 

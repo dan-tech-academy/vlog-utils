@@ -787,6 +787,154 @@ def build_final_composite(
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
 
+def mix_stems(picture: Path, out_path: Path, edl: dict, edit_dir: Path) -> list[str]:
+    """Mix voice, SFX, and music onto a copied picture. Video is not re-filtered."""
+    from audio import build_mix_graph, mix_command
+
+    audio_block = edl.get("audio") or {}
+    voice = audio_block.get("voice") or {}
+    voice_file = voice.get("file")
+    voice_from_video = not voice_file
+    voice_path = None if voice_from_video else resolve_path(voice_file, edit_dir)
+    sfx = list(audio_block.get("sfx") or [])
+    music = audio_block.get("music")
+    if not (isinstance(music, dict) and music.get("file")):
+        music = None
+    voice_input = 0 if voice_from_video else 1
+    graph = build_mix_graph(
+        sfx=sfx,
+        music=music,
+        voice_sample_rate=int(voice.get("sample_rate") or 48000),
+        voice_start=float(voice.get("start") or 0.0),
+        voice_input=voice_input,
+    )
+    cmd = mix_command(
+        picture,
+        voice_path,
+        [resolve_path(item["file"], edit_dir) for item in sfx],
+        resolve_path(music["file"], edit_dir) if music else None,
+        graph,
+        out_path,
+        voice_from_video,
+    )
+    print(f"mix → {out_path.name}")
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    return cmd
+
+
+def _finish_picture(
+    edl: dict,
+    edit_dir: Path,
+    out_path: Path,
+    base_path: Path,
+    overlays: list[dict],
+    subs_path: Path | None,
+    *,
+    style_id: str,
+    fontsdir: Path | None,
+    no_loudnorm: bool,
+    draft: bool,
+) -> None:
+    from audio import should_mix
+
+    if should_mix(edl):
+        picture = out_path.with_suffix(".picture.mp4")
+        build_final_composite(
+            base_path, overlays, subs_path, picture, edit_dir,
+            style_id=style_id, fontsdir=fontsdir,
+        )
+        if no_loudnorm:
+            mix_stems(picture, out_path, edl, edit_dir)
+            picture.unlink(missing_ok=True)
+            return
+        mixed = out_path.with_suffix(".mixed.mp4")
+        mix_stems(picture, mixed, edl, edit_dir)
+        picture.unlink(missing_ok=True)
+        print("loudness normalization → social-ready (-14 LUFS / -1 dBTP / LRA 11)")
+        apply_loudnorm_two_pass(mixed, out_path, preview=draft)
+        mixed.unlink(missing_ok=True)
+        return
+
+    if no_loudnorm:
+        build_final_composite(
+            base_path, overlays, subs_path, out_path, edit_dir,
+            style_id=style_id, fontsdir=fontsdir,
+        )
+        return
+    prenorm = out_path.with_suffix(".prenorm.mp4")
+    build_final_composite(
+        base_path, overlays, subs_path, prenorm, edit_dir,
+        style_id=style_id, fontsdir=fontsdir,
+    )
+    print("loudness normalization → social-ready (-14 LUFS / -1 dBTP / LRA 11)")
+    apply_loudnorm_two_pass(prenorm, out_path, preview=draft)
+    prenorm.unlink(missing_ok=True)
+
+
+def render_edl(
+    edl: dict,
+    edit_dir: Path,
+    out_path: Path,
+    *,
+    preview: bool = False,
+    draft: bool = False,
+    fps: str | None = None,
+    build_subtitles: bool = False,
+    no_subtitles: bool = False,
+    no_loudnorm: bool = False,
+    theme=None,
+) -> None:
+    """Extract, concat, composite, optional mix, then loudnorm."""
+    edit_dir = Path(edit_dir)
+    out_path = Path(out_path)
+    if theme is None:
+        try:
+            theme = load_theme(edit_dir)
+        except ThemeError as exc:
+            sys.exit(str(exc))
+    style_id = resolve_caption_style(edl, theme)
+    language = (
+        (edl.get("captions") or {}).get("language")
+        or edl.get("language")
+        or "en"
+    )
+    fontsdir = theme.font("body").file.parent
+    frame_mode = theme.frame_mode
+    if edl.get("plate") or (edl.get("frame") or {}).get("mode") == "force":
+        frame_mode = "force"
+    segment_paths = extract_all_segments(
+        edl, edit_dir, preview=preview, draft=draft, fps=fps,
+        frame_mode=frame_mode,
+        frame_size=(theme.frame_width, theme.frame_height),
+    )
+    if draft:
+        base_name = "base_draft.mp4"
+    elif preview:
+        base_name = "base_preview.mp4"
+    else:
+        base_name = "base.mp4"
+    base_path = edit_dir / base_name
+    concat_segments(segment_paths, base_path, edit_dir)
+    subs_path: Path | None = None
+    if not no_subtitles:
+        if build_subtitles:
+            from captions import cues_for_edl, write_ass
+
+            subs_path = edit_dir / "master.ass"
+            write_ass(
+                cues_for_edl(edl, edit_dir, style_id, language),
+                subs_path, theme, style_id,
+            )
+        elif edl.get("subtitles"):
+            subs_path = resolve_subtitles_path(edl["subtitles"], edit_dir)
+    overlays = list(edl.get("overlays") or [])
+    _finish_picture(
+        edl, edit_dir, out_path, base_path, overlays, subs_path,
+        style_id=style_id, fontsdir=fontsdir,
+        no_loudnorm=no_loudnorm, draft=draft,
+    )
+
+
 # -------- Main ---------------------------------------------------------------
 
 
@@ -837,72 +985,17 @@ def main() -> None:
     edit_dir = edl_path.parent
     out_path = args.output.resolve()
 
-    try:
-        theme = load_theme(edit_dir)
-    except ThemeError as exc:
-        sys.exit(str(exc))
-    style_id = resolve_caption_style(edl, theme)
-    language = (
-        (edl.get("captions") or {}).get("language")
-        or edl.get("language")
-        or "en"
+    render_edl(
+        edl,
+        edit_dir,
+        out_path,
+        preview=args.preview,
+        draft=args.draft,
+        fps=args.fps,
+        build_subtitles=args.build_subtitles,
+        no_subtitles=args.no_subtitles,
+        no_loudnorm=args.no_loudnorm,
     )
-    fontsdir = theme.font("body").file.parent
-    frame_mode = theme.frame_mode
-    if edl.get("plate") or (edl.get("frame") or {}).get("mode") == "force":
-        frame_mode = "force"
-
-    # 1. Extract per-segment (auto-grade per range if EDL grade is "auto")
-    segment_paths = extract_all_segments(
-        edl, edit_dir, preview=args.preview, draft=args.draft, fps=args.fps,
-        frame_mode=frame_mode,
-        frame_size=(theme.frame_width, theme.frame_height),
-    )
-
-    # 2. Concat → base
-    if args.draft:
-        base_name = "base_draft.mp4"
-    elif args.preview:
-        base_name = "base_preview.mp4"
-    else:
-        base_name = "base.mp4"
-    base_path = edit_dir / base_name
-    concat_segments(segment_paths, base_path, edit_dir)
-
-    # 3. Subtitles: build if requested, resolve final path
-    subs_path: Path | None = None
-    if not args.no_subtitles:
-        if args.build_subtitles:
-            from captions import cues_for_edl, write_ass
-
-            subs_path = edit_dir / "master.ass"
-            write_ass(
-                cues_for_edl(edl, edit_dir, style_id, language),
-                subs_path,
-                theme,
-                style_id,
-            )
-        elif edl.get("subtitles"):
-            subs_path = resolve_subtitles_path(edl["subtitles"], edit_dir)
-
-    # 4. Composite (overlays + subtitles LAST) → intermediate (pre-loudnorm) path
-    overlays = edl.get("overlays") or []
-    if args.no_loudnorm:
-        # Composite directly to final output
-        build_final_composite(
-            base_path, overlays, subs_path, out_path, edit_dir,
-            style_id=style_id, fontsdir=fontsdir,
-        )
-    else:
-        # Composite to a temp file, then run loudnorm → final output
-        tmp_composite = out_path.with_suffix(".prenorm.mp4")
-        build_final_composite(
-            base_path, overlays, subs_path, tmp_composite, edit_dir,
-            style_id=style_id, fontsdir=fontsdir,
-        )
-        print("loudness normalization → social-ready (-14 LUFS / -1 dBTP / LRA 11)")
-        apply_loudnorm_two_pass(tmp_composite, out_path, preview=args.draft)
-        tmp_composite.unlink(missing_ok=True)
 
     size_mb = out_path.stat().st_size / (1024 * 1024)
     print(f"\ndone: {out_path} ({size_mb:.1f} MB)")
