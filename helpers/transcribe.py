@@ -33,6 +33,11 @@ import requests
 SCRIBE_URL = "https://api.elevenlabs.io/v1/speech-to-text"
 
 
+def scribe_model_id() -> str:
+    """Convert-API model. Override with SCRIBE_MODEL_ID if a response shape drifts."""
+    return os.environ.get("SCRIBE_MODEL_ID", "scribe_v2")
+
+
 def load_api_key() -> str:
     for candidate in [Path(__file__).resolve().parent.parent / ".env", Path(".env")]:
         if candidate.exists():
@@ -88,7 +93,7 @@ def call_scribe(
     num_speakers: int | None = None,
 ) -> dict:
     data: dict[str, str] = {
-        "model_id": "scribe_v1",
+        "model_id": scribe_model_id(),
         "diarize": "true",
         "tag_audio_events": "true",
         "timestamps_granularity": "word",

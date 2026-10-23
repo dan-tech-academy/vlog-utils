@@ -1,0 +1,18 @@
+{
+  "stt": {
+    "provider": "scribe",
+    "model_id": "scribe_v2"
+  },
+  "tts": {
+    "provider": "azure",
+    "language": "vi",
+    "voices": {
+      "vi": "vi-VN-NamMinhNeural",
+      "en": "en-US-AndrewNeural"
+    },
+    "fallback": {
+      "provider": "edge",
+      "dev_only": true
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "note": "Azure Speech SDK and edge-tts WordBoundary offsets are 100-nanosecond ticks. 10000000 ticks = 1 second. Confirmed against edge_tts.constants.TICKS_PER_SECOND and edge_tts.submaker (offset/10 microseconds). No live Azure key was available when this fixture was written.",
+  "unit": "100ns",
+  "ticks_per_second": 10000000,
+  "events": [
+    {"text": "Xin", "audio_offset": 5000000, "duration": 3000000},
+    {"text": "chào", "audio_offset": 8000000, "duration": 4000000}
+  ],
+  "expected_words": [
+    {"type": "word", "text": "Xin", "start": 0.5, "end": 0.8},
+    {"type": "word", "text": "chào", "start": 0.8, "end": 1.2}
+  ]
+}
