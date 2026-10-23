@@ -1,6 +1,6 @@
 ---
 name: video-use
-description: Edit any video by conversation. Transcribe, cut, color grade, generate overlay animations, burn subtitles — for talking heads, montages, tutorials, travel, interviews. No presets, no menus. Ask questions, confirm the plan, execute, iterate, persist. Production-correctness rules are hard; everything else is artistic freedom.
+description: Edit footage by conversation. A footage folder uses the style-explainer skill (portrait 9:16 unless the user asks for 16:9). Transcribe, cut, grade, burn subtitles. Production-correctness rules are hard. Pacing, frame, graphics, SFX, and music for footage live in style-explainer. compile_script.py is a separate tool for a folder that has script.json and no camera.
 ---
 
 # Video Use
@@ -92,7 +92,9 @@ For a custom animation slot, create `<edit>/animations/slot_<id>/` with `Bash` a
 
 ## The process
 
-A folder of camera files stays on the inventory path. `compile_script.py` is only for a folder that has `script.json` and no camera media. Confirm language, voice id, template choices, bed id, and runtime before a new synthesis. A cache hit may render without asking again.
+A folder of camera files is a footage edit. Read `skills/style-explainer/SKILL.md` and `skills/style-explainer/style.json`, then follow that skill. It owns pacing, the frame, the per-segment visual plan, SFX, and music. The default delivery is portrait 1080×1920. Landscape 1920×1080 is used only when the prompt asks for 16:9, landscape, horizontal, or YouTube widescreen. Write `edit/style-run.json` with `orientation` and `chrome` before the visual plan. `helpers/check_visual_plan.py` has to pass before `render.py`.
+
+`compile_script.py` is only for a folder that has `script.json` and no camera media. It is not a step in a footage run. Confirm language, voice id, template choices, bed id, and runtime before a new synthesis. A cache hit may render without asking again.
 
 1. **Inventory.** `ffprobe` every source. `transcribe_batch.py` on the directory. `pack_transcripts.py` to produce `takes_packed.md`. Sample one or two `timeline_view`s for a visual first impression.
 2. **Pre-scan for problems.** One pass over `takes_packed.md` to note verbal slips, obvious mis-speaks, or phrasings to avoid. Plain list, feed into the editor brief.
@@ -114,7 +116,7 @@ A folder of camera files stays on the inventory path. `compile_script.py` is onl
 
    For anything the user will publish (launch, promo, ad), also spawn one **critic sub-agent** with the rendered file, the EDL, and any reference videos the user gave. Brief it to roast, not to praise: a verdict, ranked problems with timecodes and evidence (frames, levels), and the 5 fixes to do first. Fresh eyes catch what the author stopped seeing — cut-off payoff lines, 0.5s memes, unreadable 28px text at phone size.
 
-   If anything fails: fix → re-render → re-eval. **Cap at 3 self-eval passes** — if issues remain after 3, flag them to the user rather than looping forever. Only present the preview once the self-eval passes.
+   If anything fails: fix → re-render → re-eval. Stop as soon as the checks pass. Stop early when a new pass leaves the same failures as the one before it. `style-explainer` `self_eval.max_passes` (default 3) is the hard backstop, not a quota to fill. If issues remain, list them with timecodes in `edit/project.md` and still show the preview. `helpers/self_eval.py` is that rule. Do not hide a file because a check is still open.
 8. **Iterate + persist.** Natural-language feedback, re-plan, re-render. Never re-transcribe. Final render on confirmation. Append to `project.md`.
 
 ## Cut craft (techniques)

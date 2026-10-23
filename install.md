@@ -76,13 +76,17 @@ Figure out which agent you are running under, and register once. A symlink of th
     ```bash
     mkdir -p ~/.claude/skills
     ln -sfn ~/Developer/video-use ~/.claude/skills/video-use
+    ln -sfn ~/Developer/video-use/skills/style-explainer ~/.claude/skills/style-explainer
     ```
+
+    Footage edits use `style-explainer`. `skills/index.json` lists that skill and the core. Do not register any other style.
 
 - **Codex** (`$CODEX_HOME` set, or `~/.codex/` present):
 
     ```bash
     mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
     ln -sfn ~/Developer/video-use "${CODEX_HOME:-$HOME/.codex}/skills/video-use"
+    ln -sfn ~/Developer/video-use/skills/style-explainer "${CODEX_HOME:-$HOME/.codex}/skills/style-explainer"
     ```
 
 - **Hermes / Openclaw / another agent with a skills directory**: symlink `~/Developer/video-use` into that agent's skills directory under the name `video-use`. If the agent has no skills directory, add a line to its system prompt / config pointing at `~/Developer/video-use/SKILL.md` (e.g. an `@~/Developer/video-use/SKILL.md` import in a `CLAUDE.md`-equivalent).
