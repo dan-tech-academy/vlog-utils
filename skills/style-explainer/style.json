@@ -1,0 +1,57 @@
+{
+  "id": "explainer",
+  "title": "Talking-head explainer",
+  "language": "vi",
+  "frames": {
+    "landscape": {"width": 1920, "height": 1080, "margin_v": 90, "font_size": 22},
+    "portrait": {"width": 1080, "height": 1920, "margin_v": 220, "font_size": 28}
+  },
+  "chrome": {
+    "clean": {"top": 120, "side": 64, "right_extra": 0, "bottom_extra": 0},
+    "shorts": {"top": 160, "side": 48, "right_extra": 96, "bottom_extra": 120}
+  },
+  "captions": {"style": "sentence", "font": "body"},
+  "energy": "measured",
+  "pacing": {
+    "pad_ms": [80, 140],
+    "cut_silence_s": 0.4,
+    "keep_breath_s": 0.15,
+    "max_hold_s": 20,
+    "broll_s": [2, 5],
+    "hook_s": 8
+  },
+  "primitives": {
+    "text": ["line", "emphasis", "terminal"],
+    "motion": ["hold", "fade", "slide", "count-up", "draw-on", "punch-in", "ken-burns"],
+    "layout": ["clean", "side-card", "lower-card", "split", "lower-third", "bespoke"],
+    "data": ["figure", "comparison", "steps", "code"],
+    "overlay": ["alpha-card", "broll", "photo"],
+    "transition": ["cut"],
+    "sfx": ["reveal", "tick", "impact"]
+  },
+  "guardrails": {
+    "max_graphics_per_10s": 2,
+    "min_clean_s": 1.0,
+    "min_graphic_s": 2.0,
+    "no_same_treatment_back_to_back": true,
+    "do": [
+      "Show the payload of the line: a figure, a contrast, the steps, the warning, the term.",
+      "Leave the face clean when the line is a story, a joke, or a question the face already carries.",
+      "Spend a stronger motion on the hook and on the final claim."
+    ],
+    "dont": [
+      "Do not play a fixed sequence of templates.",
+      "Do not cover the eyes.",
+      "Do not put a whoosh on a jump cut.",
+      "Do not repeat the same layout and motion on the next segment.",
+      "Do not put a number on screen that this segment did not say."
+    ]
+  },
+  "sfx": {"cuts": false, "kinds": ["reveal", "tick", "impact"]},
+  "self_eval": {"max_passes": 3},
+  "music": {"policy": "library", "folder_wins": true, "duck_db": -13, "attack_s": 0.08, "release_s": 0.4},
+  "brand": {"watermark": false, "intro": false, "outro": false, "lower_third": true},
+  "requires": ["talking_head"],
+  "optional": ["broll", "photo", "voice", "music", "sfx"],
+  "missing": {"talking_head": "stop"}
+}

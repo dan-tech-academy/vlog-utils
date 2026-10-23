@@ -1,0 +1,43 @@
+{
+  "title": "Talking-head explainer style",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "title",
+    "language",
+    "frames",
+    "chrome",
+    "captions",
+    "energy",
+    "pacing",
+    "primitives",
+    "guardrails",
+    "sfx",
+    "self_eval",
+    "music",
+    "brand",
+    "requires",
+    "optional",
+    "missing"
+  ],
+  "properties": {
+    "id": {"type": "string"},
+    "title": {"type": "string"},
+    "language": {"type": "string"},
+    "frames": {"type": "object"},
+    "chrome": {"type": "object"},
+    "captions": {"type": "object"},
+    "energy": {"type": "string"},
+    "pacing": {"type": "object"},
+    "primitives": {"type": "object"},
+    "guardrails": {"type": "object"},
+    "sfx": {"type": "object"},
+    "self_eval": {"type": "object"},
+    "music": {"type": "object"},
+    "brand": {"type": "object"},
+    "requires": {"type": "array"},
+    "optional": {"type": "array"},
+    "missing": {"type": "object"}
+  }
+}

@@ -354,11 +354,13 @@ def music_gain_chain(music: dict) -> str:
 def load_music_manifest(path: Path) -> dict:
     data = json.loads(Path(path).read_text())
     for bed in data.get("beds") or []:
+        ident = bed.get("id", "?")
         if bed.get("vocals") is True:
-            ident = bed.get("id", "?")
             raise MusicError(
                 f"music bed '{ident}' sets vocals true; beds stay instrumental"
             )
+        if "license" in bed and not str(bed.get("license") or "").strip():
+            raise MusicError(f"music bed '{ident}' has an empty license")
     return data
 
 
@@ -506,21 +508,22 @@ def apply_music_policy(
     manifest_dir: Path,
     duration: float,
 ) -> dict:
-    """Drop the bed when the channel lock is closed. Otherwise loop it to length.
+    """Keep a bed the EDL names. The theme lock only blocks a bed nobody asked for.
 
-    A closed lock removes ``audio.music`` so the mix graph matches a render
-    that never had a bed.
+    An id is resolved from the manifest even when ``theme.music.enabled`` is
+    false. A folder file is used as given. The resolved PCM is ``edit/audio/bed.wav``.
     """
     if not should_mix(edl):
         return edl
     audio = dict(edl.get("audio") or {})
-    if not music_is_on(theme_music, manifest):
+    music = dict(audio.get("music") or {})
+    named = bool(music.get("file") or music.get("id"))
+    if not named and not music_is_on(theme_music, manifest):
         audio.pop("music", None)
         updated = dict(edl)
         updated["audio"] = audio
         return updated
-    music = dict(audio.get("music") or {})
-    bed_id = music.get("id") or (theme_music or {}).get("id")
+    bed_id = music.get("id") or (None if named else (theme_music or {}).get("id"))
     if bed_id and not music.get("file"):
         bed = _bed_by_id(manifest, str(bed_id))
         music["file"] = str(Path(manifest_dir) / bed["file"])
@@ -532,6 +535,7 @@ def apply_music_policy(
     src = Path(music["file"])
     if not src.is_file():
         raise MusicError(f"music bed missing file {src}")
+    music["requested_file"] = str(src)
     defaults = {
         "duck_db": -13.0,
         "attack_s": 0.08,

@@ -10,6 +10,11 @@ brand/music/*.wav
 brand/music/*.mp3
 brand/music/*.flac
 brand/music/*.m4a
+# The explainer library is committed. Other beds stay ignored.
+!brand/music/measured.wav
+!brand/music/curious.wav
+!brand/music/tense.wav
+!brand/music/light.wav
 
 # Python
 __pycache__/

@@ -329,6 +329,46 @@ def probe_source_fps(video: Path) -> str | None:
 # -------- Per-segment extraction (Rule 2 + Rule 3) --------------------------
 
 
+def crop_filter(crop: dict | None) -> str | None:
+    """Source-pixel window chosen by looking at a filmstrip. Not a face detector."""
+    if not crop:
+        return None
+    width = int(crop["w"])
+    height = int(crop["h"])
+    y = int(crop.get("y") or 0)
+    keys = crop.get("keyframes") or []
+    if keys:
+        x_expr = _crop_x_expr(keys).replace(",", r"\,")
+    else:
+        x_expr = str(int(crop["x"]))
+    chain = f"crop={width}:{height}:{x_expr}:{y}"
+    zoom = float(crop.get("zoom") or 1.0)
+    if zoom > 1.001:
+        zw = int(round(width * zoom))
+        zh = int(round(height * zoom))
+        zw -= zw % 2
+        zh -= zh % 2
+        chain += (
+            f",scale={zw}:{zh},"
+            f"crop={width}:{height}:(iw-{width})/2:(ih-{height})/2"
+        )
+    return chain
+
+
+def _crop_x_expr(keys: list[dict]) -> str:
+    ordered = sorted(keys, key=lambda item: float(item["t"]))
+    expr = str(int(ordered[-1]["x"]))
+    for index in range(len(ordered) - 2, -1, -1):
+        t0 = float(ordered[index]["t"])
+        t1 = float(ordered[index + 1]["t"])
+        x0 = int(ordered[index]["x"])
+        x1 = int(ordered[index + 1]["x"])
+        span = max(1e-3, t1 - t0)
+        lerp = f"{x0}+({x1 - x0})*(t-{t0:.3f})/{span:.3f}"
+        expr = f"if(lt(t,{t1:.3f}),{lerp},{expr})"
+    return expr
+
+
 def extract_segment(
     source: Path,
     seg_start: float,
@@ -340,6 +380,7 @@ def extract_segment(
     rate: str | None = None,
     frame_mode: str = "source",
     frame_size: tuple[int, int] = (1920, 1080),
+    crop: dict | None = None,
 ) -> None:
     """Extract a cut range as its own MP4 with grade + 30ms audio fades baked in.
 
@@ -359,6 +400,9 @@ def extract_segment(
     vf_parts: list[str] = []
     if is_hdr_source(source):
         vf_parts.append(TONEMAP_CHAIN)
+    cropped = crop_filter(crop) if crop else None
+    if cropped:
+        vf_parts.append(cropped)
     vf_parts.append(scale)
     if grade_filter:
         vf_parts.append(grade_filter)
@@ -437,6 +481,7 @@ def extract_all_segments(
         out_rate = "24"
 
     seg_paths: list[Path] = []
+    reframes: list[dict] = []
     print(f"extracting {len(ranges)} segment(s) → {clips_dir.name}/  @ {out_rate} fps"
           f"{' (forced)' if fps is not None else ' (from source)'}")
     if is_auto:
@@ -458,14 +503,46 @@ def extract_all_segments(
         print(f"  [{i:02d}] {src_name}  {start:7.2f}-{end:7.2f}  ({duration:5.2f}s)  {note}")
         if is_auto:
             print(f"        grade: {seg_filter or '(none)'}")
+        crop = r.get("crop") if isinstance(r.get("crop"), dict) else None
         extract_segment(
             src_path, start, duration, seg_filter, out_path,
             preview=preview, draft=draft, rate=out_rate,
             frame_mode=frame_mode, frame_size=frame_size,
+            crop=crop,
         )
         seg_paths.append(out_path)
+        reframes.append({
+            "index": i,
+            "source": src_name,
+            "crop": crop,
+        })
 
+    (edit_dir / "reframe.json").write_text(json.dumps({"ranges": reframes}, indent=2))
+    _note_unseen_faces(edit_dir, reframes)
     return seg_paths
+
+
+def _note_unseen_faces(edit_dir: Path, reframes: list[dict]) -> None:
+    """A centered window means the filmstrip showed no face. Say so in project.md."""
+    lines = []
+    for item in reframes:
+        crop = item.get("crop") or {}
+        if not isinstance(crop, dict) or crop.get("source") != "center":
+            continue
+        why = crop.get("why") or "no face on the filmstrip"
+        lines.append(
+            f"- Range {item['index']} ({item['source']}): {why}. The window is centered."
+        )
+    if not lines:
+        return
+    path = edit_dir / "project.md"
+    existing = path.read_text() if path.is_file() else ""
+    if "## Reframe" in existing:
+        return
+    block = "## Reframe\n\n" + "\n".join(lines) + "\n"
+    if existing and not existing.endswith("\n"):
+        existing += "\n"
+    path.write_text(existing + block)
 
 
 # -------- Lossless concat ----------------------------------------------------
@@ -799,8 +876,12 @@ def picture_filter_graph(
         t = float(ov["start_in_output"])
         end = t + float(ov["duration"])
         next_label = f"[v{idx}]"
+        x = int(ov.get("x") or 0)
+        y = int(ov.get("y") or 0)
+        placed = f"{x}:{y}:" if ("x" in ov or "y" in ov or ov.get("alpha")) else ""
+        alpha = ":format=auto" if ov.get("alpha") else ""
         filter_parts.append(
-            f"{current}[a{idx}]overlay=enable='between(t,{t:.3f},{end:.3f})'{next_label}"
+            f"{current}[a{idx}]overlay={placed}enable='between(t,{t:.3f},{end:.3f})'{alpha}{next_label}"
         )
         current = next_label
 
@@ -937,6 +1018,10 @@ def render_edl(
             theme = load_theme(edit_dir)
         except ThemeError as exc:
             sys.exit(str(exc))
+    from explainer_cards import apply_run_to_theme, bake_plan
+
+    apply_run_to_theme(theme, edit_dir)
+    edl = bake_plan(edl, edit_dir, theme)
     from brand import BrandError, materialize_cards, require_logo, watermark_xy
 
     try:

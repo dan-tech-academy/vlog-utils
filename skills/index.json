@@ -1,0 +1,6 @@
+{
+  "core": {"name": "video-use", "path": "."},
+  "styles": [
+    {"name": "style-explainer", "path": "skills/style-explainer"}
+  ]
+}
