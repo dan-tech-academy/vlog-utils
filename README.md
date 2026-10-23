@@ -10,6 +10,41 @@ Drop raw footage in a folder, chat with Claude Code, get `final.mp4` back. Works
 
 Cloud-hosted video-use is coming. [Join the waitlist at video-use.com](https://video-use.com?utm_source=github).
 
+## Quick start (macOS / Linux)
+
+From the footage folder:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dan-tech-academy/video-use/main/scripts/init.sh | bash
+```
+
+That clones [dan-tech-academy/video-use](https://github.com/dan-tech-academy/video-use) to `~/Developer/video-use` (`VIDEO_USE_HOME` overrides the path) and links `video-use` and `style-explainer` into `.claude/skills/` and `.agents/skills/` in the current folder. Run `~/Developer/video-use/scripts/init.sh` again any time. `--install-cmd` also links it to `~/.local/bin/video-use-init`.
+
+If the script says the ElevenLabs key is missing, add it. This appends. It does not replace an existing `.env`:
+
+```bash
+printf 'ELEVENLABS_API_KEY=%s\n' 'YOUR_KEY' >> ~/Developer/video-use/.env && chmod 600 ~/Developer/video-use/.env
+```
+
+Then open the agent in that same folder:
+
+```bash
+claude
+```
+
+> Dùng style-explainer dựng video này
+
+Portrait 1080×1920. Say "landscape 16:9" in the same prompt when you want 1920×1080.
+
+| Flag | Effect |
+| --- | --- |
+| `--global` | Link `~/.claude/skills` and `~/.agents/skills` instead of the current folder. Also `${CODEX_HOME:-~/.codex}/skills` when that directory already exists. |
+| `--remove` | Unlink the skills from the current folder. `--global --remove` unlinks the home copies. |
+| `--install-cmd` | Symlink the script to `~/.local/bin/video-use-init`, and say so if that directory is not on `PATH`. |
+| `--help` | Usage. |
+
+Update with `git -C ~/Developer/video-use pull --ff-only`, or run the script again. Uninstall the folder links with `bash ~/Developer/video-use/scripts/init.sh --remove`. If the footage folder is a git repo, the script prints `.gitignore` lines and does not edit the file.
+
 ## What it does
 
 - **Cuts out filler words** (`umm`, `uh`, false starts) and dead space between takes
@@ -25,7 +60,7 @@ Cloud-hosted video-use is coming. [Join the waitlist at video-use.com](https://v
 Paste into Claude Code, Codex, Hermes, Openclaw, or any agent with shell access:
 
 ```text
-Set up https://github.com/browser-use/video-use for me.
+Set up https://github.com/dan-tech-academy/video-use for me.
 
 Read install.md first to install this repo, wire up ffmpeg, register the skill with whichever agent you're running under, and set up the ElevenLabs API key — ask me to paste it when you need it. Then read SKILL.md for daily usage, and always read helpers/ because that's where the editing scripts live. After install, don't transcribe anything on your own — just tell me it's ready and wait for me to drop footage into a folder.
 ```
@@ -64,7 +99,7 @@ If you'd rather do it by hand:
 
 ```bash
 # 1. Clone and symlink into your agent's skills directory
-git clone https://github.com/browser-use/video-use ~/Developer/video-use
+git clone https://github.com/dan-tech-academy/video-use ~/Developer/video-use
 ln -sfn ~/Developer/video-use ~/.claude/skills/video-use        # Claude Code
 # ln -sfn ~/Developer/video-use ~/.codex/skills/video-use       # Codex
 

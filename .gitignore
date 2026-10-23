@@ -16,6 +16,9 @@ brand/music/*.m4a
 !brand/music/tense.wav
 !brand/music/light.wav
 
+# Marker written by scripts/init.sh after a successful dependency install.
+.deps-installed
+
 # Python
 __pycache__/
 *.py[cod]

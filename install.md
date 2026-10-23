@@ -19,7 +19,31 @@ Three things must exist on this machine:
 
 And one thing must be true about the current agent:
 
-4. It can discover `SKILL.md` — either via a global skills directory (`~/.claude/skills/`, `~/.codex/skills/`) or via a `CLAUDE.md` / system-prompt import.
+4. It can discover `SKILL.md` — either via a skills directory next to the footage (`.claude/skills/`, `.agents/skills/`), a global skills directory (`~/.claude/skills/`, `~/.agents/skills/`, `~/.codex/skills/`), or via a `CLAUDE.md` / system-prompt import.
+
+## Fast path
+
+On macOS or Linux the user can do this themselves. From the footage folder:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dan-tech-academy/video-use/main/scripts/init.sh | bash
+```
+
+That clones `https://github.com/dan-tech-academy/video-use` to `~/Developer/video-use` (or `$VIDEO_USE_HOME`) and links `video-use` and `style-explainer` into `.claude/skills/` and `.agents/skills/` in that folder. Same script, already cloned:
+
+```bash
+~/Developer/video-use/scripts/init.sh
+```
+
+Global links instead of the footage folder:
+
+```bash
+bash ~/Developer/video-use/scripts/init.sh --global
+```
+
+`--global` writes `~/.claude/skills` and `~/.agents/skills`, and `${CODEX_HOME:-~/.codex}/skills` when that directory already exists. `--remove` unlinks (add `--global` to unlink the home copies). `--install-cmd` symlinks the script to `~/.local/bin/video-use-init`.
+
+The script does not ask for an API key and does not overwrite an existing `.env`. If `ELEVENLABS_API_KEY` is missing, it prints the append command. Prefer this path when the user wants the skills in one folder. The steps below are the same work by hand.
 
 ## Install prompt contract
 
@@ -33,7 +57,7 @@ And one thing must be true about the current agent:
 ### 1. Clone to a stable path
 
 ```bash
-test -d ~/Developer/video-use || git clone https://github.com/browser-use/video-use ~/Developer/video-use
+test -d ~/Developer/video-use || git clone https://github.com/dan-tech-academy/video-use ~/Developer/video-use
 cd ~/Developer/video-use
 ```
 
@@ -110,10 +134,14 @@ Scribe (ElevenLabs) does all transcription. Without a key, nothing transcribes.
 
     > I need an ElevenLabs API key for transcription (word-level timestamps, speaker diarization, filler tagging). Grab one at https://elevenlabs.io/app/settings/api-keys and paste it here — I'll write it to `~/Developer/video-use/.env`. Or if you already have it exported as `ELEVENLABS_API_KEY`, say "use env" and I'll skip.
 
-    When the user pastes a key, write it to `~/Developer/video-use/.env`:
+    When the user pastes a key, append it. Do not overwrite an existing `.env`:
 
     ```bash
-    printf 'ELEVENLABS_API_KEY=%s\n' "$KEY" > ~/Developer/video-use/.env
+    if [[ -f ~/Developer/video-use/.env ]]; then
+      printf 'ELEVENLABS_API_KEY=%s\n' "$KEY" >> ~/Developer/video-use/.env
+    else
+      printf 'ELEVENLABS_API_KEY=%s\n' "$KEY" > ~/Developer/video-use/.env
+    fi
     chmod 600 ~/Developer/video-use/.env
     ```
 
@@ -160,7 +188,7 @@ Tell the user, in one short message:
 
 ## Keeping the skill current
 
-- `cd ~/Developer/video-use && git pull --ff-only` pulls the latest code. The symlink auto-picks it up on the next run.
+- `cd ~/Developer/video-use && git pull --ff-only` pulls the latest code. The symlink auto-picks it up on the next run. `scripts/init.sh` does that pull and refreshes the links.
 - If `pyproject.toml` changed deps, re-run `uv sync` / `pip install -e .` after pulling.
 
 ## Cold-start reminders
