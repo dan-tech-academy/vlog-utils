@@ -121,7 +121,6 @@ class DuckMeasurementTests(unittest.TestCase):
             "audio": {
                 "voice": {"file": "voice.wav"},
                 "sfx": sfx,
-                "music": {"file": "brand/music/bed.wav", "gain_db": -16, "voice_spans": [[0, 1]]},
             },
         }
         with tempfile.TemporaryDirectory() as tmp:
@@ -203,11 +202,17 @@ class DuckMeasurementTests(unittest.TestCase):
 
 
 class RepoManifestTests(unittest.TestCase):
-    def test_committed_manifest_is_closed_and_empty(self):
+    def test_committed_library_is_instrumental_and_licensed(self):
         manifest = load_music_manifest(ROOT / "brand" / "music" / "manifest.json")
-        self.assertFalse(manifest["enabled"])
-        self.assertEqual(manifest["beds"], [])
+        self.assertTrue(manifest["enabled"])
         self.assertEqual(manifest["duck_db"], -13)
+        ids = [bed["id"] for bed in manifest["beds"]]
+        self.assertEqual(ids, ["measured", "curious", "tense", "light"])
+        for bed in manifest["beds"]:
+            self.assertIs(bed["vocals"], False)
+            self.assertTrue(bed["license"])
+            self.assertTrue((ROOT / "brand" / "music" / bed["file"]).is_file())
+            self.assertTrue((ROOT / "brand" / "music" / bed["license_file"]).is_file())
 
 
 if __name__ == "__main__":

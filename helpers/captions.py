@@ -165,6 +165,10 @@ def ass_timestamp(seconds: float) -> str:
 def style_line(style_id: str, theme) -> str:
     role, size, bold, alignment, margin_extra, border, outline = _STYLE_SPEC[style_id]
     face = theme.font(role)
+    override = getattr(theme, "caption_font_size", None)
+    if override and style_id == "sentence":
+        size = int(override)
+        margin_extra = 0
     margin_v = int(theme.margin_v) + margin_extra
     primary = theme.text
     secondary = theme.text_muted

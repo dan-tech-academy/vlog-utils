@@ -1,10 +1,63 @@
 {
-  "enabled": false,
-  "note": "No beds are committed. Add a licensed instrumental file, list it under beds with vocals false, then set enabled to true here and in the theme.",
+  "enabled": true,
+  "note": "Four original instrumental beds written for the talking-head explainer and dedicated CC0. A file in the footage folder still wins. The channel theme leaves music.enabled false so a run that names no bed stays silent.",
   "duck_db": -13,
   "attack_s": 0.08,
   "release_s": 0.4,
   "fade_in_s": 0.15,
   "fade_out_s": 0.5,
-  "beds": []
+  "beds": [
+    {
+      "id": "measured",
+      "file": "measured.wav",
+      "mood": ["explanatory", "calm"],
+      "energy": "low",
+      "bpm": 80,
+      "length_s": 8.0,
+      "license": "CC0-1.0",
+      "license_file": "measured.LICENSE",
+      "vocals": false,
+      "loop": true,
+      "gain_db": -16
+    },
+    {
+      "id": "curious",
+      "file": "curious.wav",
+      "mood": ["question", "hook"],
+      "energy": "low-medium",
+      "bpm": 96,
+      "length_s": 8.0,
+      "license": "CC0-1.0",
+      "license_file": "curious.LICENSE",
+      "vocals": false,
+      "loop": true,
+      "gain_db": -16
+    },
+    {
+      "id": "tense",
+      "file": "tense.wav",
+      "mood": ["warning"],
+      "energy": "medium",
+      "bpm": 108,
+      "length_s": 8.0,
+      "license": "CC0-1.0",
+      "license_file": "tense.LICENSE",
+      "vocals": false,
+      "loop": true,
+      "gain_db": -16
+    },
+    {
+      "id": "light",
+      "file": "light.wav",
+      "mood": ["story", "joke"],
+      "energy": "low-medium",
+      "bpm": 104,
+      "length_s": 8.0,
+      "license": "CC0-1.0",
+      "license_file": "light.LICENSE",
+      "vocals": false,
+      "loop": true,
+      "gain_db": -16
+    }
+  ]
 }

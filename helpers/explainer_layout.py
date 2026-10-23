@@ -73,7 +73,12 @@ def card_rect(
     safe = _safe(box)
     if layout == "lower-card" or (layout == "side-card" and box["orientation"] == "portrait"):
         card_h = min(int(box["height"] * 0.38), int(safe.h))
-        return Rect(safe.x, safe.y + safe.h - card_h, safe.w, card_h)
+        top = safe.y + safe.h - card_h
+        midpoint = box["height"] / 2
+        if top < midpoint:
+            top = midpoint
+            card_h = max(40, safe.y + safe.h - top)
+        return Rect(safe.x, top, safe.w, card_h)
     if layout in ("side-card", "split", "bespoke"):
         card_w = 640 if max_width is None else max_width
         card_h = 520
