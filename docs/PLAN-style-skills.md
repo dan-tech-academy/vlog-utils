@@ -9,7 +9,7 @@ Planning only. This file is the design. Nothing in `helpers/` or `skills/` chang
 
 The goal of this work is one style skill, done completely and to a high standard: the talking-head explainer. It is not a platform, and it is not the first of several styles built in parallel. The skill is finished only when the definition of done below is true. A landscape-only cut, a fixture that never leaves the test suite, or a core that could host four future styles does not count.
 
-The owner opens an agent (Claude Code or Codex) in a folder that already holds the assets, invokes `style-explainer`, and the agent analyzes that folder and finishes a polished video. Each run picks one orientation: landscape 16:9 (1920×1080) or portrait 9:16 (1080×1920). The picture and the soundtrack come from those assets plus the channel brand, type, composable visual primitives, and the CC0 SFX already in the repo.
+The owner opens an agent (Claude Code or Codex) in a folder that already holds the assets, invokes `style-explainer`, and the agent analyzes that folder and finishes a polished video. The delivery is portrait 9:16 (1080×1920) unless the prompt asks for landscape 16:9 (1920×1080). The picture comes from those assets plus the channel brand, type, and composable visual primitives. The bed is a file in the folder or, if there is none, one track from the built-in music library. SFX come from the CC0 set already in the repo.
 
 What appears on screen is chosen per segment from what that sentence means. The skill sets taste and limits. It does not set a template sequence.
 
@@ -19,13 +19,13 @@ Scope is the footage and pre-recorded-audio path. `compile_script.py` and Azure 
 
 The skill is done when every line below is true. Partial credit does not close the work. A phase can land in git before this list is complete. The skill is not complete until the list is.
 
-1. **Real folder, both deliveries.** From a real asset folder (one or more talking-head takes, optional b-roll, photos, a voice file, music, SFX — nothing synthesized), an agent following `skills/style-explainer/SKILL.md` produces `edit/final.mp4` twice: once at 1920×1080 and once at 1080×1920. The owner can watch both. The portrait file is the same editorial cut, reframed, not a second script.
+1. **Real folder, both deliveries.** From a real asset folder (one or more talking-head takes, optional b-roll, photos, a voice file, music, SFX — nothing synthesized), an agent following `skills/style-explainer/SKILL.md` produces `edit/final.mp4`. With no orientation in the prompt, that file is 1080×1920. When the prompt asks for landscape, a second file is 1920×1080. The owner can watch both. The landscape file is the same editorial cut, not a second script.
 2. **Context-driven visuals.** `edit/visual_plan.json` exists for each delivery. Every segment names an intent, a treatment composed of primitives (or an explicit clean face), the on-screen text or data, and a rationale tied to the words in context. The checker accepts the plan. The same footage with a different transcript yields a different plan and a visibly different picture (acceptance test in section 3.10).
 3. **Captions.** Sentence-length ASS, Be Vietnam Pro, spoken case, diacritics intact, inside the safe band for that orientation. Subtitles are the last filter.
 4. **SFX.** Jump cuts are dry. Any effect that fires is one the visual plan named, from the CC0 set or a same-named file in the folder, inside the density cap. A folder with no SFX files still finishes.
-5. **Music.** A music file in the folder is the bed and ducks under speech. A folder with no music has no bed in the mix graph. The skill does not generate music.
+5. **Music.** A music file in the folder is the bed and ducks under speech. With no file in the folder, the bed is one track from the built-in library, chosen from the piece's mood and energy and named in the plan. The skill does not generate music.
 6. **Brand.** Lower-third shows "Dan Tech" and `@dantech0xff` for the short window in section 3.5. Watermark, intro, and outro stay off. Colors and fonts come from `brand/theme.json`, including the labeled placeholders.
-7. **Self-eval loop.** The agent runs the checklist in section 2.4, writes what it saw in `edit/project.md`, and re-renders when a check fails, up to 3 passes. A failed relevance check changes the visual plan. It does not swap in a keyword-mapped card.
+7. **Self-eval loop.** The agent runs the checklist in section 2.4 and writes what it saw in `edit/project.md`. It stops when the checks pass. It stops early when a new pass leaves the same failures. It will not render more than `self_eval.max_passes` times (default 3). Anything still wrong is listed for the user along with the preview. A failed relevance check changes the visual plan. It does not swap in a keyword-mapped card.
 8. **Docs.** Core `SKILL.md` tells a styled run to follow this skill. `skills/style-explainer/SKILL.md` is enough to run the edit without this plan open. `install.md` registers the core and this one skill.
 9. **Tests and fixture renders.** The suite in section 3.10 is green without a network call: inventory, plan check, reframe, both frame sizes, the two-transcript difference, captions, a dry cut, music absent and music present. Sample frames from the fixtures are kept with the test output so a reviewer can see the card, the face, and the portrait crop.
 
@@ -47,7 +47,10 @@ The agent does that choice in the creative-direction step (section 2.5). It writ
 | --- | --- |
 | Scope | One skill, the talking-head explainer, finished to the definition of done. The core is only what that skill calls. |
 | Visuals | Decided per segment from the spoken meaning. The skill sets guardrails only. |
-| Orientations | Both, chosen per run. Landscape 1920×1080. Portrait 1080×1920. |
+| Orientations | Both work. Default is portrait 1080×1920. Landscape 1920×1080 only when the prompt asks for it. |
+| Face crop | The agent looks at `timeline_view` frames and writes a crop. No face-detection library. See section 3.4. |
+| Music | A file in the folder wins. Otherwise the agent picks one bed from `brand/music/` by the piece's mood and energy. |
+| Self-eval | Stop when the checks pass. Stop early when a pass changes nothing. Hard cap defaults to 3 and is configurable. Leftover issues go to the user with the preview. |
 | Core vs skill | One engine and the core `SKILL.md`. This skill is `skills/style-explainer/SKILL.md` plus `style.json`. It does not fork `render.py`. |
 | Speech source | Camera audio, or a voice file already in the folder. No TTS. |
 | Channel look | `brand/theme.json` still owns colors, fonts, and the handle. Colors stay the labeled placeholders. |
@@ -95,7 +98,7 @@ Built because the explainer needs it:
 
 - Inventory of `talking_head`, `broll`, `photo`, `voice`, `music`, `sfx`, plus `ambiguous` when a file is unclear.
 - A visual-plan schema and a checker for this skill's guardrails and safe zones.
-- Portrait face-crop inside extract.
+- A per-range crop field, applied in extract, holding the window the agent chose by looking at the frames.
 - Alpha-card overlay so a graphic can sit beside or under the face.
 - One symlink in `install.md` for `skills/style-explainer`.
 
@@ -108,7 +111,7 @@ folder of assets
     → style-run.json (orientation, chrome) and the editorial cut
     → creative direction: visual_plan.json, one entry per segment
     → check guardrails and safe zones
-    → render.py bakes that plan (portrait face-crop when the source is wider than 9:16)
+    → render.py bakes that plan (the agent's crop, when a 16:9 source is delivered as 9:16)
     → mix, loudnorm
     → self-eval, including whether the graphics still match the speech
     → edit/final.mp4
@@ -163,7 +166,7 @@ skills/style-explainer/
 The agent-facing contract:
 
 1. `skills/style-explainer/SKILL.md` starts by requiring a read of the core `SKILL.md` and of its own `style.json`.
-2. The agent writes `edit/style-run.json` before the plan: `style` (`explainer`), `orientation` (`landscape` or `portrait`), `chrome` (`clean` or `shorts`).
+2. The agent writes `edit/style-run.json` before the plan: `style` (`explainer`), `orientation` (`portrait` unless the prompt asked for landscape), `chrome` (`clean`, or `shorts` when the prompt says Shorts, TikTok, or Reels).
 3. The agent writes `edit/visual_plan.json` (section 2.5), then `edl.json` whose overlays, SFX, and frame match that plan.
 4. `helpers/check_visual_plan.py` reads the inventory, `style.json`, the run file, the packed words, and the plan. It exits non-zero with the field name when a guardrail or a safe zone is broken. It does not reject a plan for using an "unexpected" graphic on a sentence that contains a digit. Relevance rules are in section 2.5.
 5. Render runs only after the check passes.
@@ -182,7 +185,8 @@ The agent-facing contract:
 | `guardrails` | Density, minimum clean-face gap, no identical treatment back to back, do/don't. |
 | `primitives` | The vocabulary the plan may compose. Not a sequence. |
 | `sfx` | Jump-cut effects off. Which kinds exist. Density cap (the core cap still applies). |
-| `music` | `if_present`. Duck numbers when a bed exists. |
+| `music` | Folder file wins. Otherwise one library id. Duck numbers when a bed plays. |
+| `self_eval` | `max_passes`, default 3. The loop still stops earlier when the checks pass or a pass changes nothing. |
 | `brand` | Lower-third on. Watermark, intro, outro off. |
 | `requires` | `talking_head` must be ≥ 1 or the run stops. |
 | `optional` | `broll`, `photo`, `voice`, `music`, `sfx`. |
@@ -190,14 +194,22 @@ The agent-facing contract:
 
 ### 2.4 Self-eval
 
-The core checklist still applies: `timeline_view` on the rendered file at every cut, caption readable and inside the safe band, diacritics drawn, `ffprobe` duration within 0.1 s of `total_duration_s`, `ebur128` on the mix. The agent still cannot claim the mix sounds good. It reports the numbers. Cap remains 3 passes.
+The core checklist still applies: `timeline_view` on the rendered file at every cut, caption readable and inside the safe band, diacritics drawn, `ffprobe` duration within 0.1 s of `total_duration_s`, `ebur128` on the mix. The agent still cannot claim the mix sounds good. It reports the numbers.
+
+The loop stops on purpose, not on a magic third try:
+
+- The number 3 is the original video-use rule. `SKILL.md` says "Cap at 3 self-eval passes — if issues remain after 3, flag them to the user rather than looping forever." The README draws the same cap. Nothing in the repo measures that edits stop improving at pass 3. Each pass is a full re-render plus a filmstrip at every cut, so the cap is a cost stop. The sentence that mattered, and that this plan had shortened away, is the flag-to-the-user part.
+- Stop as soon as the checks pass. Unused passes do not run.
+- Stop early when a pass leaves the same failures as the pass before it. Another render will not invent a new idea.
+- `style.json` `self_eval.max_passes` is the hard backstop. Default 3, the same number as the core, so a long explainer cannot wander into five full renders. A run may set it lower. It may not set it to unlimited.
+- When the loop stops with failures still open, `edit/project.md` lists them with timecodes and the preview is shown anyway. The core line "only present the preview once the self-eval passes" hides a file the owner needs to see. The issues travel with the file.
 
 This skill adds:
 
 - Every on-screen string is grounded in that segment's quote (section 2.5).
 - A data graphic is absent when the quote has no datum.
 - The face the plan promised to leave visible is still visible. Eyes are not under a card.
-- Portrait: `edit/reframe.json` matches what the frame shows (face anchor, or a recorded center fallback).
+- Portrait: `edit/reframe.json` matches the crop the agent wrote (`source: look` or `source: center`), and the rendered frame shows that window.
 - `edit/project.md` records each pass: what failed, what changed in the plan, the loudness numbers.
 
 ### 2.5 Creative direction
@@ -264,7 +276,8 @@ The checker fails the plan when:
 - A graphic starts before the previous graphic's clean gap (`guardrails.min_clean_s`) has elapsed.
 - Graphic count in any 10 s window exceeds `guardrails.max_graphics_per_10s`.
 - The card rect, computed for this orientation (section 3.5), intersects the caption band, the lower-third while it is on screen, or the face box expanded by 24 px.
-- `sfx` names `cut`, or a kind outside `style.json`, or a music path when inventory has no `music` role.
+- `sfx` names `cut`, or a kind outside `style.json`.
+- A library bed is named while the folder already has a `music` file, or the named id is absent from `brand/music/manifest.json`, or that bed's `vocals` is true or its `license` is empty.
 - The run is portrait and the frame in the EDL is 1920×1080, or the reverse.
 - A range edge falls inside a word.
 
@@ -285,7 +298,7 @@ The same two links under `${CODEX_HOME:-$HOME/.codex}/skills/`. The skill symlin
 
 `skills/index.json` lists the core and `style-explainer` so the core description can name the skill when the user asks for an edit and does not name one. The index is that list, not a loader.
 
-The core description says: a footage edit uses `style-explainer`. The explainer description says: use it for a talking-head tech explainer in 16:9 or 9:16, including Vietnamese narration, a portrait reframe of landscape footage, and visuals chosen from the words.
+The core description says: a footage edit uses `style-explainer`. The explainer description says: use it for a talking-head tech explainer. Delivery is 9:16 unless the user asks for 16:9. Visuals are chosen from the words. A 16:9 camera is cropped from the filmstrip, not by a face detector.
 
 Core `SKILL.md` keeps the hard rules and the helper list. For a footage run, pacing, frame, graphics, SFX, and music policy live in this skill. `compile_script.py` is documented as a separate tool and is not a step in the run.
 
@@ -293,7 +306,7 @@ Core `SKILL.md` keeps the hard rules and the helper list. For a footage run, pac
 
 Directory: `skills/style-explainer/`. Skill name: `style-explainer`. Preset id: `explainer`.
 
-A person talks to camera about a technical idea, in Vietnamese or mixed Vietnamese and English, and the edit keeps their face as the A-roll. Fillers and dead air go. Each kept sentence is directed from what it means: a figure may become a card, a warning may become a punch-in, a story may stay a clean face, and the next sentence does not reuse that treatment. Captions are sentence-length in Be Vietnam Pro. Jump cuts stay dry. Music plays only when the folder already has a bed, and it ducks. The same cut can be delivered as 1920×1080 or as 1080×1920. Portrait from a landscape camera crops horizontally around the face.
+A person talks to camera about a technical idea, in Vietnamese or mixed Vietnamese and English, and the edit keeps their face as the A-roll. Fillers and dead air go. Each kept sentence is directed from what it means: a figure may become a card, a warning may become a punch-in, a story may stay a clean face, and the next sentence does not reuse that treatment. Captions are sentence-length in Be Vietnam Pro. Jump cuts stay dry. A music file in the folder is the bed; otherwise the agent picks one instrumental from the built-in library to match the piece. The bed ducks under speech. The default delivery is 1080×1920. A 16:9 camera is cropped to the face by the window the agent reads off the frames. 1920×1080 is rendered only when the prompt asks for landscape.
 
 ### 3.1 Inputs
 
@@ -307,7 +320,7 @@ Optional:
 | `broll` | Available to the visual plan as a cutaway when the words need a picture the face does not show. |
 | `photo` | Available as a still, made into a silent clip at the run's frame rate. |
 | `voice` | Replaces camera audio as the voice stem when the file is present. |
-| `music` | The bed. Ducked. Absent means no music input. |
+| `music` | Wins over the library. Ducked. |
 | `sfx` | A file whose name matches a kind (`reveal`, `tick`, …) overrides the CC0 clip for that kind. |
 
 Missing:
@@ -316,7 +329,7 @@ Missing:
 | --- | --- |
 | No `talking_head` | Stop. Name the missing role. Do not synthesize speech. Photos and a voice file are not a substitute. This skill is a face on camera. |
 | No b-roll and no photos | Normal. The plan uses the face, type, and cards. |
-| No music | No music node in the mix graph. Do not generate a bed. |
+| No music in the folder | Pick one bed from `brand/music/` (section 3.8). Do not generate a bed. Do not leave the mix silent. |
 | No SFX files | The CC0 set, only kinds the plan names and `style.json` allows. |
 | Ambiguous file | One question, then inventory is updated. |
 
@@ -377,7 +390,8 @@ A separate voice file wins over camera audio for the stem. The camera picture st
     ]
   },
   "sfx": {"cuts": false, "kinds": ["reveal", "tick", "impact"]},
-  "music": {"policy": "if_present", "duck_db": -13, "attack_s": 0.08, "release_s": 0.4},
+  "self_eval": {"max_passes": 3},
+  "music": {"policy": "library", "folder_wins": true, "duck_db": -13, "attack_s": 0.08, "release_s": 0.4},
   "brand": {"watermark": false, "intro": false, "outro": false, "lower_third": true},
   "requires": ["talking_head"],
   "optional": ["broll", "photo", "voice", "music", "sfx"],
@@ -393,7 +407,7 @@ These lists are the legal ingredients and the limits. They are not an order of a
 
 ### 3.3 Orientation for a run
 
-The agent asks once, unless the user already said 16:9, 9:16, landscape, portrait, Shorts, or TikTok. Default is landscape. "Shorts", "TikTok", or "Reels" selects portrait and `chrome: shorts`. The answer is `edit/style-run.json`.
+The default is portrait, 1080×1920, chrome `clean`. The agent does not ask. Landscape, 1920×1080, is used only when the prompt asks for it: 16:9, landscape, horizontal, or YouTube widescreen. "Shorts", "TikTok", or "Reels" stays portrait and sets `chrome: shorts`. The answer is `edit/style-run.json`. A folder whose only camera is already 16:9 still delivers portrait unless the prompt asked for landscape. The crop in section 3.4 is what makes that delivery a face, not a letterbox.
 
 One editorial cut serves both orientations. A portrait run is the same ranges, captions, and plan times, rendered into 1080×1920. Layout primitives follow the orientation: a `side-card` in the landscape plan becomes a `lower-card` in the portrait plan so the face keeps the upper frame. The agent rewrites that layout field when the run orientation changes. The intent, the quote, and the rationale stay. The owner who wants a shorter vertical cut asks for that as a second edit.
 
@@ -401,28 +415,43 @@ How a source meets the frame:
 
 | Source | Landscape run | Portrait run |
 | --- | --- | --- |
-| Already 16:9 | Scale to 1920×1080. | Crop horizontally with the face anchor (section 3.4), then scale to 1080×1920. |
+| Already 16:9 | Scale to 1920×1080. | Crop with the window the agent wrote (section 3.4), then scale to 1080×1920. |
 | Already 9:16 | Pad to 1920×1080 (letterbox). Do not crop the head. | Scale to 1080×1920. No face crop. |
 | Other portrait | Pad to 1920×1080. | Scale to fit 1080×1920, pad the remainder. No side crop. |
-| Wider than 16:9 | Scale to fit 1920×1080, pad. | Crop horizontally with the face anchor to 9:16, then scale. |
+| Wider than 16:9 | Scale to fit 1920×1080, pad. | Crop with the agent's window to 9:16, then scale. |
 
 `force` letterbox remains the tool for "pad". The face crop is used only when the run is portrait and the source is wider than 9:16.
 
-### 3.4 Reframe and face anchor
+### 3.4 Reframe — look, then crop
 
-New helper `helpers/reframe.py`. It runs inside extract, before the grade, only for ranges whose source needs the portrait crop. The crop is a window of the source: full source height, width = height × 9/16, then that window scales to 1080×1920. A 1920×1080 camera becomes a 608×1080 window scaled up. Left and right are what get cut. The full original height is kept, so the head-and-torso that was in frame stays in frame.
+The current engine already puts the face in frame when an agent edits with it. It does not do that with a detector. Reuse that path.
 
-Face anchor, per EDL range:
+What `main` actually does:
 
-1. Sample three frames: 0.4 s after the in-point, the midpoint, and 0.4 s before the out-point.
-2. Detect a single face box on each. The recommended detector is OpenCV YuNet (one small ONNX file under `brand/models/`, optional extra `reframe`). No network call.
-3. Take the median face-center x. Place the crop so that x sits on the crop's horizontal center. Clamp so the window stays inside the source.
-4. If the three centers differ by more than 20% of the source width, the person is moving inside the shot. Sample one frame per second and keyframe the crop x. Within the shot, x may move at most 40% of the crop width per second. Across an edit cut, the next shot snaps to its own median. Jump cuts may change the crop instantly because the picture already cuts.
-5. If no face is found, use a fixed window centered horizontally and record `"fallback": "center"` on that range in `edit/reframe.json`. The portrait self-eval says so.
+- Nothing in `helpers/` detects a face. There is no OpenCV, MediaPipe, YuNet, or Haar cascade. `is_portrait_source` in `helpers/render.py` is only "displayed height greater than width," including a 90° or 270° display-matrix rotation. `scale_filter_for` then scales the long side (`scale=-2:1920` for a portrait source, `scale=1920:-2` for a landscape source) or letterboxes when `frame.mode` is `force`. That scale never recenters on a person.
+- The picture the model sees is `helpers/timeline_view.py`. `extract_frames` pulls real JPEGs with ffmpeg (`scale=320:-2`) and composites a filmstrip. `SKILL.md` tells the agent to look at that filmstrip at decision points, and principle 6 tells it to invent the technique with ffmpeg when the format can do it.
+- The EDL `grade` field is a preset name or a raw ffmpeg filter. `extract_segment` appends that filter after the scale. A crop written there is how a 16:9 frame becomes a 9:16 frame centered on the face. The coordinates come from the model reading the filmstrip, not from a box a library returned. That is the reframe the owner already saw work.
+- `grade` is one string for the whole EDL. `extract_all_segments` reads `edl.get("grade")` and applies it to every range. One crop for every shot is the concrete gap: a subject who sits somewhere else in the next take gets the first take's window, and a crop stuffed into `grade` is mixed up with the color grade.
 
-Vertical tracking is out of this version. The crop uses the full source height. A punch-in the plan asks for is a scale around the face anchor inside the already-cropped frame, not a second detector path.
+This skill keeps the model's eye and gives the crop its own field. It does not add YuNet. A detector would repeat a job the model already does, and it would be a new weight file for a miss the self-eval filmstrip already catches. The 320 px filmstrip is coarse. For a talking head the face is large enough that the model can place the window, and the rendered filmstrip is the check. Tests do not need a detector: they pass an authored crop, the same shape the model writes, and assert the ellipse survives.
 
-The fixture draws a beige ellipse on a dark 16:9 frame so the detector has a target, and the portrait test asserts the ellipse is fully inside 1080×1920. A second clip with no ellipse asserts the center fallback and a note in `reframe.json`.
+Per range, when the run is portrait and the source is wider than 9:16:
+
+1. The agent runs `timeline_view` on the in-point, the middle, and the out-point of the range. One filmstrip is enough when the face does not move.
+2. It writes a crop in source pixels: full source height, width = height × 9/16, x chosen so the face sits in the window. A 1920×1080 camera is a 608×1080 window. The window is clamped inside the source. The field lives on the range, not inside `grade`:
+
+```json
+{"crop": {"x": 120, "y": 0, "w": 608, "h": 1080, "source": "look",
+          "why": "Face is left of center on the filmstrip at 1.2s."}}
+```
+
+3. `extract_segment` applies that crop before the scale and before the grade. The scaled frame is 1080×1920. `edit/reframe.json` copies the crop and the `why`.
+4. If the three looks disagree by more than about a fifth of the frame, the face is moving inside the shot. The agent writes one crop per second as keyframes, and x may move by at most 40% of the crop width per second. Across an edit cut the next shot has its own crop. A jump cut may change the window instantly because the picture already cuts.
+5. If the agent cannot see a face, the window is centered, `source` is `center`, and the `why` says so. Self-eval says so too.
+
+A source that is already 9:16 is scaled, not cropped. `reframe.json` has no crop for that range. Vertical tracking stays out. A punch-in the plan asks for is a further scale around the crop the agent already wrote.
+
+The fixture ellipse sits at a known x. The portrait test's plan contains the crop that keeps it inside 1080×1920, and the render asserts the ellipse is fully inside the frame. A second plan with a center crop on that off-center ellipse fails that assert. A clip with no ellipse uses `source: center` and the self-eval note is written. No test loads a face model.
 
 ### 3.5 Safe zones
 
@@ -492,7 +521,26 @@ Captions: `sentence`. Vietnamese chunks stay on syllable bounds (12–18). Engli
 
 SFX: `cuts` is false. Jump cuts are silent apart from the 30 ms voice fades. A plan may name `reveal`, `tick`, or `impact` at a payoff word, attack subtracted once, gain from the manifest. It may name none. Density still drops extras. Folder files named for a kind replace that kind's CC0 clip. No stinger, because outro is off.
 
-Music: policy `if_present`. A `music` inventory role becomes the bed, looped or trimmed by the existing resolver, ducked −13 dB under speech spans. There is no outro card. The bed fades out over the last 0.5 s of the program. No `music` role means the mix graph has no bed input. The skill does not ask the agent to compose music.
+Music is one bed for the whole piece. The mix graph has a single `audio.music` slot, and a bed change mid-sentence is not this skill.
+
+Priority:
+
+1. A `music` file in the folder is the bed. The plan records `"source": "folder"` and the path. The library is not also mixed.
+2. Otherwise the agent reads the kept transcript and picks one id from `brand/music/manifest.json`. The pick follows the piece, not a rotation: a calm explanation, a warning, a question-led hook, a light story. The style's energy is `measured`, and the library has no trailer bed. The plan records the id, the mood it matched, and why.
+3. The skill does not compose or generate a bed. If the manifest is empty the run stops and says the library is missing. It does not ship silent and call that a choice.
+
+The library is small and committed with the repo. Four instrumentals is enough for this skill:
+
+| Id | Mood | Energy | Role |
+| --- | --- | --- | --- |
+| `measured` | explanatory, calm | low | The ordinary Dan Tech explainer. |
+| `curious` | question, hook | low-medium | A piece that opens on a question and stays there. |
+| `tense` | warning | medium | "Don't do this" pieces. |
+| `light` | story, joke | low-medium | A piece whose payload is a story, not a figure. |
+
+Each bed in the manifest has `id`, `file`, `mood` (list), `energy`, `bpm`, `length_s`, `license`, `license_file`, `vocals: false`, `loop`, and `gain_db`. `license` is `CC0-1.0` or another license that allows commercial use with no royalty. The license text sits beside the audio. `load_music_manifest` already rejects `vocals: true`. A bed with an empty `license` fails the same way. Files are long enough to cover a few minutes by the loop `prepare_bed` already does, or they are short loops with the existing crossfade.
+
+`apply_music_policy` today drops `audio.music` whenever `brand/theme.json` has `music.enabled: false` or the manifest is disabled. Both are false on `main` because no licensed file was committed. Once these four files exist, the manifest's `enabled` becomes true. The theme lock stays false so a core run that never named a bed still stays silent. The policy change is: an EDL that names a file or a library id keeps that bed; the theme lock only blocks a bed nobody asked for. Duck stays −13 dB, attack 80 ms, release 400 ms. There is no outro card. The bed fades out over the last 0.5 s. The two transcripts in section 3.10 must not pick the same id.
 
 Brand: lower-third on, as specified per orientation. Watermark, intro, and outro off. If the owner later enables the watermark in the theme and the logo file exists, the core watermark path draws it and the card layout already clears that corner. This skill does not turn the watermark on by itself.
 
@@ -509,21 +557,22 @@ Shared picture:
 - One 16:9 clip, 8 s, 30 fps, ellipse left of center.
 - The same picture is paired with two transcripts. Transcript A includes a filler, a 0.6 s silence, and the phrase `nhanh hơn 40%`. Transcript B has no number and no contrast; its payload line is `đừng đẩy secret lên git`.
 - One native 9:16 clip, 4 s, with speech and no number.
-- One music bed file, used only by the music-present test.
-- The default fixture folder has no music file.
+- One music bed file in a side folder, used only by the folder-wins test.
+- The default fixture folder has no music file. Its plan names a library id.
+- The library fixture is four silent-or-tone files plus a manifest with the metadata in section 3.8. The real CC0 files replace the tones when the library is committed. The test checks the id and the policy, not the melody.
 
 Tests:
 
 1. Inventory marks the 16:9 clip `talking_head` and does not invent a music role when no bed is present.
 2. A hand-authored plan for transcript A (comparison card on `40%`) passes `check_visual_plan.py`. A plan that puts the same comparison card on transcript B fails, because B's quote has no datum. A plan that repeats the same layout and motion on adjacent segments fails. A plan that sets `sfx` to `cut` fails. A cut inside a word fails.
 3. The plan for A and the plan for B, both valid, do not share a treatment signature on the payload segment. A is a card with `40%`. B is `clean` or a punch-in whose on-screen text is `secret`.
-4. Landscape render of A: `ffprobe` 1920×1080, duration within 0.1 s of the EDL, caption text present in `master.ass` with the spoken diacritics, alpha card present, mix graph has no `[bed]`, loudnorm still last. Jump cuts have no whoosh.
-5. Landscape render of B from the same picture: the payload frame's card region differs from A's (pixel hash of that rect). The face ellipse is still visible.
-6. Portrait render of A's 16:9 source: `ffprobe` 1080×1920. The ellipse is fully inside the frame. `reframe.json` records a face anchor, not `center`, for that range. The card's bounding box is entirely below the vertical midpoint and above the caption band. Captions use margin 220.
+4. Landscape render of A, prompted as landscape: `ffprobe` 1920×1080, duration within 0.1 s of the EDL, caption text present in `master.ass` with the spoken diacritics, alpha card present, mix graph has the library bed named in A's plan and a duck, loudnorm still last. Jump cuts have no whoosh. No prompt for landscape is a failed test of the default, not a landscape render.
+5. Landscape render of B from the same picture: the payload frame's card region differs from A's (pixel hash of that rect). The face ellipse is still visible. B's plan names a different library id from A's.
+6. Portrait render of A's 16:9 source, which is the default: `ffprobe` 1080×1920. The plan's crop keeps the ellipse fully inside the frame. `reframe.json` records `source: look` and that crop, not a detector. The card's bounding box is entirely below the vertical midpoint and above the caption band. Captions use margin 220.
 7. Portrait render of the native 9:16 clip: scale only. `reframe.json` has no crop for that range.
-8. A clip with no ellipse: portrait render still succeeds, `reframe.json` says `fallback: center`, and the self-eval note is written.
-9. The same EDL with the music fixture: the mix graph has one bed input and a duck. Removing the file removes the bed. No other node appears.
-10. Sample frames are written for the owner: landscape A on the card, landscape B on the payload line, portrait A on the card, portrait native 9:16.
+8. A center crop authored on the off-center ellipse fails the "ellipse fully inside" assert. A clip with no ellipse, crop `source: center`, still renders, and the self-eval note is written.
+9. The same EDL with a music file in the folder: the mix graph uses that file and not the library id. Removing the file returns the graph to the library bed. A plan that names a library id while the folder file is present fails the checker. A manifest bed with `vocals: true` or an empty `license` fails to load.
+10. Sample frames are written for the owner: landscape A on the card, landscape B on the payload line, portrait A on the card (face inside the crop), portrait native 9:16.
 
 `check_visual_plan` and the reframe math are unit tests. The frame sizes are fixture renders through `render.py`, the same path a real folder uses. The two-transcript pair is the proof that content, not a preset, decides the picture.
 
@@ -537,12 +586,12 @@ Two phases, both in service of the definition of done. There is no third phase i
 
 **Goal:** A folder of this skill's asset types can be classified, this skill's guardrails can be validated, and the agent is told to follow `style-explainer`.
 
-**Why first:** The skill text needs a checker and an inventory before a render can be honest. The portrait crop waits until those exist, so the crop is not demoed on a hard-coded folder.
+**Why first:** The skill text needs a checker and an inventory before a render can be honest. The crop field waits until those exist, so a crop is not demoed on a hard-coded folder.
 
 **Tasks:**
 
 1. `helpers/inventory.py` and `tests/test_inventory.py` for the table in section 2.1. Canned probe results and a canned transcript. No network.
-2. `skills/style.schema.json`, `helpers/style.py`, `helpers/check_visual_plan.py`, and `skills/style-explainer/style.json` as in section 3.2. The skill prose can be a stub until phase 2.
+2. `skills/style.schema.json`, `helpers/style.py`, `helpers/check_visual_plan.py`, and `skills/style-explainer/style.json` as in section 3.2. The skill prose can be a stub until phase 2. The music manifest schema (mood, energy, bpm, length, license, vocals) is checked here against a fixture manifest. The audio files themselves land in phase 2.
 3. `skills/index.json` listing the core and this skill, and the two links in `install.md`.
 4. Rewrite the core `SKILL.md` process: a footage edit follows this skill, hard rules unchanged. Point `compile_script.py` at the non-style tool.
 5. Document `edit/style-run.json` and the in-memory frame override.
@@ -570,25 +619,24 @@ Two phases, both in service of the definition of done. There is no third phase i
 
 1. Write `skills/style-explainer/SKILL.md` to the level in section 3, including the worked examples as judgment, not as a table to execute blindly.
 2. Alpha-card renderer for the primitives the plan names: text, data types, motions. Placement from section 3.5. Reject a plan that intersects the eyes.
-3. `helpers/reframe.py` and the extract hook. Median face x per range. Keyframed x only when the face moves more than 20% of the source width. Center fallback recorded. Punch-in is a scale around that anchor when the plan asks for it.
+3. Per-range `crop` on the EDL, applied in `extract_segment` before scale and grade. The agent fills it from `timeline_view`, as section 3.4 describes. `edit/reframe.json` records the window and `source: look` or `source: center`. No face-detection dependency. Punch-in is a further scale around that window when the plan asks for it.
 4. Portrait lower-third at the top-left. Landscape lower-third unchanged.
 5. Caption size and `margin_v` from the run's frame entry.
-6. SFX only from the plan, never a cut whoosh. Music only from inventory.
+6. SFX only from the plan, never a cut whoosh. Music: folder file wins; otherwise the library id from the plan. `apply_music_policy` keeps an explicit file or id when the theme lock is closed, and still drops a bed nobody named. Commit the four CC0 (or equivalent commercial-use) beds, their license texts, and the manifest metadata.
 7. Self-eval notes in `edit/project.md`, including relevance.
 8. Fixtures and the renders in section 3.10. Then the real-folder run: both MP4s, both plans, the project notes.
 
-**Files:** `skills/style-explainer/SKILL.md`, `helpers/visuals/` (card path; `select.py` left uncalled), `helpers/reframe.py`, `helpers/render.py` (extract hook and in-memory frame), `helpers/brand.py` (portrait lower-third placement), `tests/test_reframe.py`, `tests/test_explainer_layout.py`, `tests/fixtures/styles/explainer/`.
+**Files:** `skills/style-explainer/SKILL.md`, `helpers/visuals/` (card path; `select.py` left uncalled), `helpers/render.py` (per-range crop and in-memory frame), `helpers/audio.py` (explicit bed kept when the theme lock is closed), `helpers/brand.py` (portrait lower-third placement), `brand/music/` (four beds, licenses, manifest), `tests/test_reframe.py`, `tests/test_explainer_layout.py`, `tests/test_music_library.py`, `tests/fixtures/styles/explainer/`.
 
-**New dependencies:** OpenCV YuNet ONNX as the optional `reframe` extra, plus the model file in `brand/models/` with its license noted beside it. If the extra is absent, the center fallback runs and the portrait ellipse test is skipped with a clear message. The rest of the suite stays runnable.
+**New dependencies:** none. No face-detection model and no new audio library. The beds are files.
 
 **Acceptance:** section 3.10, items 1–10, and items 1–9 of the definition of done. Both frame sizes are required. The real-folder run is required. A landscape-only sample does not close the phase.
 
 **Risks:**
 
-- YuNet on a synthetic ellipse may miss. The fixture ellipse should be a high-contrast head-sized oval. If the detector misses the oval, fix the fixture or the threshold before declaring the fallback a success. The fallback test is a separate clip with no oval.
+- The agent's crop on a real face at the extreme edge of a 16:9 frame can still clip an ear once the window is clamped. `reframe.json` records the clamp so the self-eval can say the crop hit the frame edge. A missed face is a bad look, fixed by looking again, not by adding a detector.
 - Alpha overlay through the current yuv420 chain will flatten the card. The card encode has to keep an alpha pix_fmt and the overlay filter has to honor it. A flattened full-frame card fails acceptance even if the timing is right.
 - Portrait captions at margin 220 can still collide with a tall card. The layout test measures both rects on 1080×1920 and fails on intersection.
-- A real face at the extreme edge of a 16:9 frame can leave the crop clamped and still clip an ear. `reframe.json` should include the clamped flag so the self-eval can say the crop hit the frame edge.
 - The real folder may contain a case the fixtures hide (two speakers, a vertical phone clip plus a landscape camera). The run stops and asks, per sections 2.1 and 3.1, rather than inventing a policy during that run.
 
 ## 5. Open decisions
@@ -601,20 +649,14 @@ The core still has a hard rule that the agent waits for a plain-English strategy
 
 | Option | Result |
 | --- | --- |
-| A. Keep one confirm | The agent shows orientation, what it will cut, the visual plan (intent, treatment, why), and whether a bed was found. Then it renders. |
+| A. Keep one confirm | The agent shows orientation (portrait unless the prompt said landscape), what it will cut, the visual plan (intent, treatment, why), and which bed (folder file or library id and why). Then it renders. |
 | B. Render straight through | Faster, and a bad filler cut or a mismatched graphic only shows up in self-eval. |
 
 **Recommendation:** A. One short confirm. The plan is the thing the owner can correct before a long render. Self-eval is a weak time to discover the agent dropped a whole take.
 
-### 5.2 Default orientation
+### 5.2 Default orientation — decided
 
-| Option | Result |
-| --- | --- |
-| A. Landscape unless the user asks | Matches a YouTube explainer. A 9:16 camera still letterboxes into 16:9. |
-| B. Match the camera | A phone clip stays 9:16 and never asks. |
-| C. Always ask | No silent default. |
-
-**Recommendation:** A, and still ask when the user has not spoken and the folder mixes 16:9 and 9:16 cameras. A single 9:16 camera with no other video can follow B without a question.
+Portrait 1080×1920 is the default. Landscape 1920×1080 happens only when the prompt asks for it. Section 3.3 has the wording that counts ("16:9", "landscape", "horizontal", "YouTube widescreen"). "Shorts", "TikTok", and "Reels" stay portrait and turn on `chrome: shorts`.
 
 ### 5.3 Same cut in both orientations?
 
@@ -625,15 +667,9 @@ The core still has a hard rule that the agent waits for a plain-English strategy
 
 **Recommendation:** A. A tighter vertical cut is a different request, not a hidden mode of this skill.
 
-### 5.4 Face detector
+### 5.4 Face crop — decided
 
-| Option | Result |
-| --- | --- |
-| A. OpenCV YuNet, optional extra, center fallback | Real anchor when the extra is installed. CI can run the ellipse test when the extra is present. |
-| B. Center crop only | No new dependency. Faces at the edge get clipped. |
-| C. Require native 9:16 for portrait | No crop. Landscape sources cannot make a portrait delivery. |
-
-**Recommendation:** A. The owner asked for a face anchor when a 16:9 source is delivered as 9:16. B is the fallback inside A, not the whole design. C drops a case the skill is supposed to handle.
+No new detector. The agent looks at `timeline_view` and writes a per-range crop, which is the mechanism `main` already uses, with the crop taken out of the shared `grade` string. Section 3.4 is the whole design. YuNet is not added.
 
 ### 5.5 Portrait chrome
 
@@ -662,20 +698,9 @@ The core still has a hard rule that the agent waits for a plain-English strategy
 
 **Recommendation:** A, and stop if the two durations disagree by more than 0.5 s.
 
-### 5.8 Model file license
-
-YuNet's ONNX is Apache-2.0 from the OpenCV zoo. Shipping it under `brand/models/` with that license text is the straightforward path.
-
-| Option | Result |
-| --- | --- |
-| A. Commit the ONNX and the license | Portrait tests can run here. |
-| B. Download on first portrait render | The repo stays smaller, and the first render needs a network. |
-
-**Recommendation:** A, if the file is small enough to review. B if the owner does not want weights in git. The center fallback must work either way.
-
 ## 6. Non-goals
 
-This work does not add another style. It does not build a style plugin system, a generic preset runner, or a registry beyond the core and `style-explainer`. It does not change TTS, `compile_script.py`, or the placeholder palette. It does not turn on the watermark. It does not vertically track a face beyond the punch-in the plan requests. It does not put a whoosh on a jump cut. It does not call `helpers/visuals/select.py`.
+This work does not add another style. It does not build a style plugin system, a generic preset runner, or a registry beyond the core and `style-explainer`. It does not change TTS, `compile_script.py`, or the placeholder palette. It does not turn on the watermark. It does not add a face detector. It does not vertically track a face beyond the punch-in the plan requests. It does not put a whoosh on a jump cut. It does not call `helpers/visuals/select.py`. It does not generate music.
 
 ## Appendix — later styles, not in this work
 
