@@ -1,19 +1,19 @@
 ---
-name: video-use-install
-description: Install video-use into the current agent (Claude Code, Codex, Hermes, Openclaw, etc.) and wire up ffmpeg + the ElevenLabs API key so the user can start editing immediately.
+name: vlog-utils-install
+description: Install vlog-utils into the current agent (Claude Code, Codex, Hermes, Openclaw, etc.) and wire up ffmpeg + the ElevenLabs API key so the user can start editing immediately.
 ---
 
-# video-use install
+# vlog-utils install
 
 Use this file only for first-time install or reconnect. For daily editing, read `SKILL.md`. Always read `helpers/` — that's where the scripts live.
 
 ## What you're doing
 
-You're setting up a conversation-driven video editor for the user. After install, the user drops raw footage into any folder, runs their agent (`claude`, `codex`, etc.) there, and says "edit these into a launch video." You do the rest by reading `SKILL.md`.
+You're setting up a conversation-driven video editor for the user. After install, the user drops raw footage into any folder, runs their agent (`claude`, `codex`, etc.) there, and says "edit these into a vlog." You do the rest by reading `SKILL.md`.
 
 Three things must exist on this machine:
 
-1. The `video-use` repo cloned somewhere stable.
+1. The `vlog-utils` repo cloned somewhere stable.
 2. `ffmpeg` on `$PATH` (plus optional `yt-dlp` for online sources).
 3. An ElevenLabs API key in `.env` at the repo root (for Scribe transcription).
 
@@ -24,7 +24,7 @@ And one thing must be true about the current agent:
 ## Install prompt contract
 
 - Do everything yourself. Only ask the user for things you cannot generate — the ElevenLabs API key, and confirmation before `brew install`.
-- Prefer a stable clone path like `~/Developer/video-use` (not `/tmp`, not `~/Downloads`).
+- Prefer a stable clone path like `~/Developer/vlog-utils` (not `/tmp`, not `~/Downloads`).
 - The skill references helpers by bare name (`transcribe.py`, `render.py`). That works because SKILL.md and `helpers/` ship together — keep them as siblings when you register the skill.
 - After install, verify by running one real command against one real file. Don't declare success on file-existence checks alone.
 
@@ -33,8 +33,8 @@ And one thing must be true about the current agent:
 ### 1. Clone to a stable path
 
 ```bash
-test -d ~/Developer/video-use || git clone https://github.com/browser-use/video-use ~/Developer/video-use
-cd ~/Developer/video-use
+test -d ~/Developer/vlog-utils || git clone https://github.com/dan-tech-academy/vlog-utils ~/Developer/vlog-utils
+cd ~/Developer/vlog-utils
 ```
 
 If the repo is already there, `git pull --ff-only` and continue.
@@ -75,17 +75,17 @@ Figure out which agent you are running under, and register once. A symlink of th
 
     ```bash
     mkdir -p ~/.claude/skills
-    ln -sfn ~/Developer/video-use ~/.claude/skills/video-use
+    ln -sfn ~/Developer/vlog-utils ~/.claude/skills/vlog-utils
     ```
 
 - **Codex** (`$CODEX_HOME` set, or `~/.codex/` present):
 
     ```bash
     mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
-    ln -sfn ~/Developer/video-use "${CODEX_HOME:-$HOME/.codex}/skills/video-use"
+    ln -sfn ~/Developer/vlog-utils "${CODEX_HOME:-$HOME/.codex}/skills/vlog-utils"
     ```
 
-- **Hermes / Openclaw / another agent with a skills directory**: symlink `~/Developer/video-use` into that agent's skills directory under the name `video-use`. If the agent has no skills directory, add a line to its system prompt / config pointing at `~/Developer/video-use/SKILL.md` (e.g. an `@~/Developer/video-use/SKILL.md` import in a `CLAUDE.md`-equivalent).
+- **Hermes / Openclaw / another agent with a skills directory**: symlink `~/Developer/vlog-utils` into that agent's skills directory under the name `vlog-utils`. If the agent has no skills directory, add a line to its system prompt / config pointing at `~/Developer/vlog-utils/SKILL.md` (e.g. an `@~/Developer/vlog-utils/SKILL.md` import in a `CLAUDE.md`-equivalent).
 
 If you can't tell which agent you're in, ask the user once: "which agent am I running under — Claude Code, Codex, or something else?" Then pick the right target.
 
@@ -99,18 +99,18 @@ Scribe (ElevenLabs) does all transcription. Without a key, nothing transcribes.
     # a) env var already exported
     [ -n "$ELEVENLABS_API_KEY" ] && echo "env"
     # b) .env at repo root already has it
-    grep -q '^ELEVENLABS_API_KEY=..' ~/Developer/video-use/.env 2>/dev/null && echo "dotenv"
+    grep -q '^ELEVENLABS_API_KEY=..' ~/Developer/vlog-utils/.env 2>/dev/null && echo "dotenv"
     ```
 
 2. If neither is set, ask the user exactly once:
 
-    > I need an ElevenLabs API key for transcription (word-level timestamps, speaker diarization, filler tagging). Grab one at https://elevenlabs.io/app/settings/api-keys and paste it here — I'll write it to `~/Developer/video-use/.env`. Or if you already have it exported as `ELEVENLABS_API_KEY`, say "use env" and I'll skip.
+    > I need an ElevenLabs API key for transcription (word-level timestamps, speaker diarization, filler tagging). Grab one at https://elevenlabs.io/app/settings/api-keys and paste it here — I'll write it to `~/Developer/vlog-utils/.env`. Or if you already have it exported as `ELEVENLABS_API_KEY`, say "use env" and I'll skip.
 
-    When the user pastes a key, write it to `~/Developer/video-use/.env`:
+    When the user pastes a key, write it to `~/Developer/vlog-utils/.env`:
 
     ```bash
-    printf 'ELEVENLABS_API_KEY=%s\n' "$KEY" > ~/Developer/video-use/.env
-    chmod 600 ~/Developer/video-use/.env
+    printf 'ELEVENLABS_API_KEY=%s\n' "$KEY" > ~/Developer/vlog-utils/.env
+    chmod 600 ~/Developer/vlog-utils/.env
     ```
 
     Never echo the key back in tool output. Never commit `.env`.
@@ -119,7 +119,7 @@ Scribe (ElevenLabs) does all transcription. Without a key, nothing transcribes.
 
     ```bash
     curl -s -o /dev/null -w '%{http_code}\n' \
-      -H "xi-api-key: $(sed -n 's/^ELEVENLABS_API_KEY=//p' ~/Developer/video-use/.env)" \
+      -H "xi-api-key: $(sed -n 's/^ELEVENLABS_API_KEY=//p' ~/Developer/vlog-utils/.env)" \
       https://api.elevenlabs.io/v1/user
     ```
 
@@ -130,7 +130,7 @@ Scribe (ElevenLabs) does all transcription. Without a key, nothing transcribes.
 Run one real thing. Prefer the lightest verification that still proves the pipeline is wired up:
 
 ```bash
-python ~/Developer/video-use/helpers/timeline_view.py --help >/dev/null && echo "helpers OK"
+python ~/Developer/vlog-utils/helpers/timeline_view.py --help >/dev/null && echo "helpers OK"
 ffprobe -version | head -1
 ```
 
@@ -140,14 +140,14 @@ Full transcription test is optional at install time — it burns Scribe credits.
 
 Tell the user, in one short message:
 
-- Where the skill is installed (`~/Developer/video-use`).
+- Where the skill is installed (`~/Developer/vlog-utils`).
 - That they should `cd` into their footage folder and start their agent there (e.g. `claude`).
-- That a good first message is: *"edit these into a launch video"* or *"inventory these takes and propose a strategy."*
+- That a good first message is: *"edit these into a vlog"* or *"inventory these takes and propose a strategy."*
 - That all outputs land in `<videos_dir>/edit/` — the repo stays clean.
 
 ## Keeping the skill current
 
-- `cd ~/Developer/video-use && git pull --ff-only` pulls the latest code. The symlink auto-picks it up on the next run.
+- `cd ~/Developer/vlog-utils && git pull --ff-only` pulls the latest code. The symlink auto-picks it up on the next run.
 - If `pyproject.toml` changed deps, re-run `uv sync` / `pip install -e .` after pulling.
 
 ## Cold-start reminders

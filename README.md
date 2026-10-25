@@ -1,14 +1,10 @@
-<p align="center">
-  <img src="static/video-use-banner.png" alt="video-use" width="100%">
-</p>
+# vlog-utils
 
-# video-use
+Introducing **vlog-utils** — a set of agent skills for editing vlogs, built for vloggers. Works with Claude Code, Codex, and other coding agents. 100% open source.
 
-Introducing **video-use** — edit videos with Claude Code. 100% open source.
+Drop your raw footage in a folder, chat with your agent, get `final.mp4` back. Built around how vlogs are actually shot — talking to camera, B-roll, travel days, day-in-the-life, sit-down chats — without presets or menus.
 
-Drop raw footage in a folder, chat with Claude Code, get `final.mp4` back. Works for any content — talking heads, montages, tutorials, travel, interviews — without presets or menus.
-
-Cloud-hosted video-use is coming. [Join the waitlist at video-use.com](https://video-use.com?utm_source=github).
+> **About this fork.** vlog-utils was forked from [browser-use/video-use](https://github.com/browser-use/video-use). Because this project is heading in a different direction — a skill set built specifically for vloggers — it has been detached from the upstream fork network and is now developed independently. The original MIT license and copyright notice are kept in [`LICENSE`](./LICENSE).
 
 ## What it does
 
@@ -25,7 +21,7 @@ Cloud-hosted video-use is coming. [Join the waitlist at video-use.com](https://v
 Paste into Claude Code, Codex, Hermes, Openclaw, or any agent with shell access:
 
 ```text
-Set up https://github.com/browser-use/video-use for me.
+Set up https://github.com/dan-tech-academy/vlog-utils for me.
 
 Read install.md first to install this repo, wire up ffmpeg, register the skill with whichever agent you're running under, and set up the ElevenLabs API key — ask me to paste it when you need it. Then read SKILL.md for daily usage, and always read helpers/ because that's where the editing scripts live. After install, don't transcribe anything on your own — just tell me it's ready and wait for me to drop footage into a folder.
 ```
@@ -39,11 +35,9 @@ cd /path/to/your/videos
 claude    # or codex, hermes, etc.
 ```
 
-For always-on editing from your own VPS or Telegram, run the agent through [Browser Use Box](https://browser-use.com/bux). [Watch the 15-second demo](https://www.tiktok.com/@browser_use/video/7639824093721758989).
-
 And in the session:
 
-> edit these into a launch video
+> edit these into a vlog
 
 It inventories the sources, proposes a strategy, waits for your OK, then produces `edit/final.mp4` next to your sources. All outputs live in `<videos_dir>/edit/` — the skill directory stays clean.
 
@@ -53,12 +47,12 @@ If you'd rather do it by hand:
 
 ```bash
 # 1. Clone and symlink into your agent's skills directory
-git clone https://github.com/browser-use/video-use ~/Developer/video-use
-ln -sfn ~/Developer/video-use ~/.claude/skills/video-use        # Claude Code
-# ln -sfn ~/Developer/video-use ~/.codex/skills/video-use       # Codex
+git clone https://github.com/dan-tech-academy/vlog-utils ~/Developer/vlog-utils
+ln -sfn ~/Developer/vlog-utils ~/.claude/skills/vlog-utils        # Claude Code
+# ln -sfn ~/Developer/vlog-utils ~/.codex/skills/vlog-utils       # Codex
 
 # 2. Install deps
-cd ~/Developer/video-use
+cd ~/Developer/vlog-utils
 uv sync                         # or: pip install -e .
 brew install ffmpeg             # required
 brew install yt-dlp             # optional, for downloading online sources
@@ -87,9 +81,7 @@ The LLM never watches the video. It **reads** it — through two layers that tog
 **Layer 2 — Visual composite (on demand).** `timeline_view` produces a filmstrip + waveform + word labels PNG for any time range. Called only at decision points — ambiguous pauses, retake comparisons, cut-point sanity checks.
 
 > Naive approach: 30,000 frames × 1,500 tokens = **45M tokens of noise**.
-> Video Use: **12KB text + a handful of PNGs**.
-
-Same idea as browser-use giving an LLM a structured DOM instead of a screenshot — but for video.
+> Vlog Utils: **12KB text + a handful of PNGs**.
 
 ## Pipeline
 
