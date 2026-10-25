@@ -33,6 +33,8 @@ Thumbs.db
 
 # Node / Remotion (installed on demand, not vendored)
 node_modules/
+apps/desktop/dist/
+apps/desktop/src-tauri/target/
 package-lock.json
 yarn.lock
 .npm/
