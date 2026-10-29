@@ -305,7 +305,7 @@ class Hub:
             self._result(
                 req_id,
                 False,
-                error="Chưa có ElevenLabs API key. Dán key vào ô ElevenLabs bên trái rồi bấm Phân tích.",
+                error="Chưa có ElevenLabs API key. Mở Cài đặt, dán key rồi chạy lại.",
             )
             return
 
@@ -559,11 +559,12 @@ class Hub:
                 self._result(req_id, False, error="đã hủy")
                 return
             self._progress(req_id, "clips", index, len(ranges))
-            item = {"index": index, "clip": None, "poster": None}
-            raw_source = sources.get(raw.get("source")) if isinstance(raw, dict) else None
+            raw = raw if isinstance(raw, dict) else {}
+            start = float(raw.get("start") or 0)
+            end = float(raw.get("end") or 0)
+            item = {"index": index, "source": raw.get("source"), "start": start, "end": end, "clip": None, "poster": None}
+            raw_source = sources.get(raw.get("source"))
             if raw_source:
-                start = float(raw.get("start") or 0)
-                end = float(raw.get("end") or 0)
                 source = _source_path(edit, raw_source)
                 stem = f"clip_{_clip_hash(source, start, end)}"
                 clip = out_dir / f"{stem}.mp4"
