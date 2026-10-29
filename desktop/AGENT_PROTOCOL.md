@@ -69,4 +69,20 @@ EDL ready:
 
 `total_duration_s` is the sum of `(end - start)`.
 
+## Comments on cards
+
+After the first cut, the user reviews a storyboard and comments on individual cards. The user note then lists them, for example:
+
+```
+Card comments:
+03 (C0103 12.37-18.30 "Quán này mình tìm được trên bản đồ"): Bỏ chữ "luôn" ở cuối.
+06 (C0104 52.25-55.98 "..."): Bỏ cảnh này.
+```
+
+- Card `N` is `ranges[N-1]` in the current `edit/edl.json`.
+- Change only the commented cards. Copy every other range unchanged: same order, same `start` and `end` values.
+- Removing a card, splitting it, or swapping in another take is allowed when the comment asks for it.
+- Keep the hard rules: snap to word boundaries and keep the padding window.
+- Write `edit/edl.json`, then `edit/agent/turn.json` with `{"kind":"edl"}`. Do not ask questions unless a comment is impossible to follow.
+
 Exit as soon as `turn.json` is written.

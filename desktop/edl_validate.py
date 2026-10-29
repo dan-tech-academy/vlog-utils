@@ -69,6 +69,25 @@ def load_words(edit_dir: Path, source_key: str) -> tuple[list[tuple[float, float
     return words, True
 
 
+def load_word_entries(edit_dir: Path, source_key: str) -> list[dict]:
+    path = edit_dir / "transcripts" / f"{source_key}.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    entries = []
+    for entry in data.get("words") or []:
+        if entry.get("type") != "word" or entry.get("start") is None or entry.get("end") is None:
+            continue
+        entries.append({
+            "start": float(entry["start"]),
+            "end": float(entry["end"]),
+            "text": str(entry.get("text") or "").strip(),
+        })
+    entries.sort(key=lambda item: item["start"])
+    return entries
+
+
 def _inside(t: float, words: list[tuple[float, float]]) -> bool:
     return any(start + EPS < t < end - EPS for start, end in words)
 
