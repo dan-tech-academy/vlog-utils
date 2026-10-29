@@ -154,6 +154,22 @@ fn media_url(root: State<MediaRoot>, path: String) -> Result<String, String> {
     Ok(media::url_for(&canonical))
 }
 
+#[tauri::command]
+fn reveal_path(root: State<MediaRoot>, path: String) -> Result<(), String> {
+    let guard = root.0.lock().map_err(|err| err.to_string())?;
+    let folder = guard.clone().ok_or("chưa chọn folder")?;
+    let file = PathBuf::from(&path);
+    if !media::allow(&folder, &file) {
+        return Err("file nằm ngoài folder đang mở".into());
+    }
+    std::process::Command::new("open")
+        .arg("-R")
+        .arg(&file)
+        .spawn()
+        .map_err(|err| err.to_string())?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let media_root = MediaRoot(Arc::new(Mutex::new(None)));
@@ -183,7 +199,8 @@ pub fn run() {
             set_api_key,
             clear_api_key,
             set_media_root,
-            media_url
+            media_url,
+            reveal_path
         ])
         .run(tauri::generate_context!())
         .expect("lỗi khi chạy Vlog Utils");

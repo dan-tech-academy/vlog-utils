@@ -50,18 +50,31 @@ fn content_type(path: &Path) -> &'static str {
     }
 }
 
+/// Each response is read into memory, so an open-ended `bytes=0-` on a camera file must not
+/// pull the whole file. The player asks again for the rest.
+const MAX_CHUNK: u64 = 4 * 1024 * 1024;
+
 fn parse_range(header_value: &str, len: u64) -> Option<(u64, u64)> {
     let spec = header_value.trim().strip_prefix("bytes=")?;
     let (start_text, end_text) = spec.split_once('-')?;
     if len == 0 {
         return None;
     }
-    let start: u64 = if start_text.is_empty() { 0 } else { start_text.parse().ok()? };
-    let end: u64 = if end_text.is_empty() { len - 1 } else { end_text.parse().ok()? };
+    let (start, end) = if start_text.is_empty() {
+        let suffix: u64 = end_text.parse().ok()?;
+        if suffix == 0 {
+            return None;
+        }
+        (len.saturating_sub(suffix), len - 1)
+    } else {
+        let start: u64 = start_text.parse().ok()?;
+        let end: u64 = if end_text.is_empty() { len - 1 } else { end_text.parse().ok()? };
+        (start, end)
+    };
     if start > end || start >= len {
         return None;
     }
-    Some((start, end.min(len - 1)))
+    Some((start, end.min(len - 1).min(start + MAX_CHUNK - 1)))
 }
 
 fn reply(status: StatusCode, content_type: &str, extra: Vec<(&str, String)>, body: Vec<u8>) -> Response<Vec<u8>> {
@@ -122,4 +135,39 @@ pub fn handle(root: Option<PathBuf>, request: Request<Vec<u8>>) -> Response<Vec<
         extra.push((header::CONTENT_RANGE.as_str(), format!("bytes {start}-{end}/{len}")));
     }
     reply(status, content_type(&path), extra, body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const GB: u64 = 1024 * 1024 * 1024;
+
+    #[test]
+    fn open_range_is_capped() {
+        assert_eq!(parse_range("bytes=0-", GB), Some((0, MAX_CHUNK - 1)));
+        assert_eq!(parse_range("bytes=100-", GB), Some((100, 100 + MAX_CHUNK - 1)));
+    }
+
+    #[test]
+    fn small_ranges_pass_through() {
+        assert_eq!(parse_range("bytes=0-1", GB), Some((0, 1)));
+        assert_eq!(parse_range("bytes=10-", 50), Some((10, 49)));
+        assert_eq!(parse_range("bytes=40-500", 50), Some((40, 49)));
+    }
+
+    #[test]
+    fn suffix_range_reads_the_tail() {
+        assert_eq!(parse_range("bytes=-10", 50), Some((40, 49)));
+        assert_eq!(parse_range("bytes=-500", 50), Some((0, 49)));
+        assert_eq!(parse_range("bytes=-0", 50), None);
+    }
+
+    #[test]
+    fn bad_ranges_are_rejected() {
+        assert_eq!(parse_range("bytes=60-", 50), None);
+        assert_eq!(parse_range("bytes=9-3", 50), None);
+        assert_eq!(parse_range("items=0-1", 50), None);
+        assert_eq!(parse_range("bytes=0-1", 0), None);
+    }
 }

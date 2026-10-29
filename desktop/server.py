@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import signal
@@ -13,7 +14,7 @@ from pathlib import Path
 
 from desktop.agents import agent_env, build_argv, parse_session_id
 from desktop.deps import binary_for, check_deps
-from desktop.edl_validate import load_words, probe_duration, validate_edl
+from desktop.edl_validate import load_word_entries, probe_duration, validate_edl
 from desktop.media import list_videos, transcript_file
 from desktop.scan import repo_changes, repo_snapshot, snapshot, unexpected_writes
 from desktop.turn_recover import (
@@ -28,18 +29,24 @@ from desktop.session import (
     apply_turn_side_effects,
     approve_strategy,
     build_prompt,
+    clear_job,
     install_protocol,
     load_state,
     load_turn,
+    mark_job,
+    project_status,
     readiness,
+    reset_project,
     save_state,
     write_answers,
     write_brief,
+    write_thread,
 )
 
 REPO = Path(__file__).resolve().parents[1]
 PROTOCOL = REPO / "desktop" / "AGENT_PROTOCOL.md"
 HELPERS = REPO / "helpers"
+TRACKED_JOBS = {"ingest", "agent_turn", "render"}
 
 
 def repo_root() -> Path:
@@ -56,6 +63,8 @@ class Hub:
         self.cancel_event = threading.Event()
         self.busy = False
         self.session_key = ""
+        self.closing = False
+        self.job_folder: Path | None = None
 
     def emit(self, msg: dict) -> None:
         with self._write_lock:
@@ -114,14 +123,37 @@ class Hub:
         return True
 
     def _run_job(self, msg: dict) -> None:
+        folder = None
         try:
+            if msg.get("cmd") in TRACKED_JOBS:
+                folder = self._folder(msg.get("folder"))
+                self.job_folder = folder
+                mark_job(folder, str(msg["cmd"]), msg.get("mode"))
             self.dispatch(msg)
         except Exception as exc:
             self._result(msg.get("id"), False, error=str(exc))
         finally:
+            # A job killed because the app quit keeps its marker so the next launch can report it.
+            if folder is not None and not self.closing:
+                clear_job(folder)
+            self.job_folder = None
             with self._proc_lock:
                 self.busy = False
             self.cancel_event.clear()
+
+    def shutdown(self) -> None:
+        self.closing = True
+        self.cancel_event.set()
+        self._kill()
+
+    def status(self, msg: dict) -> None:
+        folder = self._folder(msg.get("folder"))
+        running = self.busy and self.job_folder == folder
+        self._result(msg.get("id"), True, data=project_status(folder, running=running))
+
+    def save_thread(self, msg: dict) -> None:
+        path = write_thread(self._folder(msg.get("folder")), msg.get("thread"))
+        self._result(msg.get("id"), True, data={"path": str(path)})
 
     def dispatch(self, msg: dict) -> None:
         cmd = msg.get("cmd")
@@ -161,11 +193,15 @@ class Hub:
         if cmd == "save_ranges":
             self.save_ranges(msg)
             return
-        if cmd == "thumbs":
-            self.thumbs(msg)
+        if cmd == "clips":
+            self.clips(msg)
             return
         if cmd == "render":
             self.render(msg)
+            return
+        if cmd == "reset_project":
+            archive = reset_project(self._folder(msg.get("folder")))
+            self._result(req_id, True, data={"archive": str(archive) if archive else None})
             return
         self._result(req_id, False, error=f"lệnh không rõ: {cmd}")
 
@@ -182,19 +218,43 @@ class Hub:
         edit = folder / "edit"
         rows = []
         for video in list_videos(folder):
+            duration = probe_duration(video)
+            poster = edit / "storyboard" / f"src_{video.stem}.jpg"
+            if not poster.is_file():
+                self._still(video, min(1.0, (duration or 0) / 2), poster)
             rows.append({
                 "name": video.name,
                 "path": str(video.resolve()),
                 "size": video.stat().st_size,
                 "cached": transcript_file(edit, video).is_file(),
+                "duration": duration,
+                "poster": str(poster) if poster.is_file() else None,
             })
         return rows
 
+    def _ffmpeg(self, args: list[str], lines: list[str]) -> int:
+        argv = ["ffmpeg", "-nostdin", "-y", "-loglevel", "error", *args]
+        try:
+            return self.spawn(argv, cwd=self.repo, env=os.environ.copy(), on_line=lines.append)
+        except OSError as exc:
+            lines.append(str(exc))
+            return 127
+
+    def _still(self, source: Path, at: float, dest: Path) -> bool:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        code = self._ffmpeg(
+            ["-ss", f"{at:.3f}", "-i", str(source), "-frames:v", "1", "-vf", "scale=-2:540", str(dest)],
+            [],
+        )
+        return code == 0 and dest.is_file()
+
     def spawn(self, argv: list[str], *, cwd: Path, env: dict, on_line) -> int:
+        # stdin is the app's command pipe; ffmpeg and agent CLIs would read from it otherwise.
         proc = subprocess.Popen(
             argv,
             cwd=str(cwd),
             env=env,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -245,7 +305,7 @@ class Hub:
             self._result(
                 req_id,
                 False,
-                error="Chưa có ElevenLabs API key. Dán key vào ô ElevenLabs bên trái rồi bấm Phân tích.",
+                error="Chưa có ElevenLabs API key. Mở Cài đặt, dán key rồi chạy lại.",
             )
             return
 
@@ -442,11 +502,8 @@ class Hub:
         durations: dict[str, float] = {}
         sources = edl.get("sources") if isinstance(edl.get("sources"), dict) else {}
         for key, raw in sources.items():
-            pairs, _found = load_words(edit, str(key))
-            words[str(key)] = [{"start": start, "end": end} for start, end in pairs]
-            path = Path(str(raw))
-            if not path.is_absolute():
-                path = (edit / path).resolve()
+            words[str(key)] = load_word_entries(edit, str(key))
+            path = _source_path(edit, raw)
             if path.is_file():
                 duration = probe_duration(path)
                 if duration is not None:
@@ -480,43 +537,64 @@ class Hub:
         edl_path.write_text(json.dumps(edl, indent=2), encoding="utf-8")
         self._result(req_id, True, data={"edl": edl, "validation": validation.to_dict()})
 
-    def thumbs(self, msg: dict) -> None:
+    def clips(self, msg: dict) -> None:
+        """One small proxy per storyboard card. Unchanged ranges reuse their clip."""
         req_id = msg.get("id")
         folder = self._folder(msg.get("folder"))
-        edl_path = folder / "edit" / "edl.json"
+        edit = folder / "edit"
+        edl_path = edit / "edl.json"
+        if not edl_path.is_file():
+            self._result(req_id, False, error="Chưa có edl.json")
+            return
         edl = json.loads(edl_path.read_text(encoding="utf-8"))
-        out_dir = folder / "edit" / "storyboard"
+        out_dir = edit / "storyboard"
         out_dir.mkdir(parents=True, exist_ok=True)
-        sources = edl.get("sources") or {}
-        frames = []
-        ranges = edl.get("ranges") or []
-        total = len(ranges)
+        sources = edl.get("sources") if isinstance(edl.get("sources"), dict) else {}
+        ranges = edl.get("ranges") if isinstance(edl.get("ranges"), list) else []
+        keep: set[str] = set()
+        items = []
+        failures: list[str] = []
         for index, raw in enumerate(ranges):
             if self.cancel_event.is_set():
                 self._result(req_id, False, error="đã hủy")
                 return
-            self._progress(req_id, "thumbs", index, total)
-            key = raw.get("source")
-            source = sources.get(key)
-            dest = out_dir / f"seg_{index:02d}.jpg"
-            if not source:
-                frames.append({"index": index, "path": None})
-                continue
-            path = Path(str(source))
-            if not path.is_absolute():
-                path = (folder / "edit" / path).resolve()
+            self._progress(req_id, "clips", index, len(ranges))
+            raw = raw if isinstance(raw, dict) else {}
             start = float(raw.get("start") or 0)
-            code = subprocess.call(
-                [
-                    "ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", str(path),
-                    "-frames:v", "1", "-vf", "scale=480:-1", str(dest),
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            frames.append({"index": index, "path": str(dest) if code == 0 and dest.is_file() else None})
-        self._progress(req_id, "thumbs", total, total)
-        self._result(req_id, True, data={"frames": frames})
+            end = float(raw.get("end") or 0)
+            item = {"index": index, "source": raw.get("source"), "start": start, "end": end, "clip": None, "poster": None}
+            raw_source = sources.get(raw.get("source"))
+            if raw_source:
+                source = _source_path(edit, raw_source)
+                stem = f"clip_{_clip_hash(source, start, end)}"
+                clip = out_dir / f"{stem}.mp4"
+                poster = out_dir / f"{stem}.jpg"
+                keep.update({clip.name, poster.name})
+                if not poster.is_file():
+                    self._still(source, start, poster)
+                if not clip.is_file() and end > start:
+                    lines: list[str] = []
+                    part = out_dir / f"{stem}.part.mp4"
+                    code = self._ffmpeg([
+                        "-ss", f"{start:.3f}", "-t", f"{end - start:.3f}", "-i", str(source),
+                        "-map", "0:v:0", "-map", "0:a:0?", "-vf", "scale=-2:540",
+                        "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-pix_fmt", "yuv420p",
+                        "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(part),
+                    ], lines)
+                    if code == 0 and part.is_file():
+                        part.replace(clip)
+                    else:
+                        part.unlink(missing_ok=True)
+                        failures.append(f"cảnh {index + 1}: {_tail(lines) or f'ffmpeg thoát {code}'}")
+                item["clip"] = str(clip) if clip.is_file() else None
+                item["poster"] = str(poster) if poster.is_file() else None
+            items.append(item)
+            self.emit({"id": req_id, "type": "clip", "data": item})
+        for stale in out_dir.glob("clip_*"):
+            if stale.name not in keep:
+                stale.unlink(missing_ok=True)
+        self._progress(req_id, "clips", len(ranges), len(ranges))
+        self._result(req_id, True, data={"clips": items, "failures": failures})
 
     def render(self, msg: dict) -> None:
         req_id = msg.get("id")
@@ -579,6 +657,15 @@ def _tail(lines: list[str]) -> str:
     return text
 
 
+def _source_path(edit: Path, raw) -> Path:
+    path = Path(str(raw))
+    return path if path.is_absolute() else (edit / path).resolve()
+
+
+def _clip_hash(source: Path, start: float, end: float) -> str:
+    return hashlib.sha1(f"{source}|{start:.3f}|{end:.3f}".encode()).hexdigest()[:12]
+
+
 def _clean_ranges(raw) -> list[dict]:
     if not isinstance(raw, list):
         raise ValueError("ranges phải là list")
@@ -628,8 +715,7 @@ def serve(hub: Hub | None = None) -> None:
     hub._emit_fn = emit
 
     def stop(_signum, _frame):
-        hub.cancel_event.set()
-        hub._kill()
+        hub.shutdown()
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, stop)
@@ -658,8 +744,19 @@ def serve(hub: Hub | None = None) -> None:
         if cmd == "cancel":
             hub.request_cancel(msg)
             continue
+        if cmd in {"project_status", "save_thread"}:
+            handler = hub.status if cmd == "project_status" else hub.save_thread
+            try:
+                handler(msg)
+            except (OSError, ValueError) as exc:
+                hub._result(msg.get("id"), False, error=str(exc))
+            continue
         if not hub.try_start(msg):
             hub._result(msg.get("id"), False, error="busy")
+
+    # stdin closes when the app exits, even on a crash or force quit. Children run in their
+    # own session, so they would outlive us unless killed here.
+    hub.shutdown()
 
 
 if __name__ == "__main__":
