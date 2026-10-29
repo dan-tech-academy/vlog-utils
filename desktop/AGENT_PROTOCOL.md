@@ -16,7 +16,8 @@ Only paths under `edit/`. The required outputs are:
 - `edit/agent/turn.json` — always, before you exit
 - `edit/edl.json` — only after `strategy_approved` is true
 
-Do not write `edit/agent/state.json`, `edit/agent/protocol.md`, or `edit/agent/answers.json`.
+Do not write `edit/agent/state.json`, `edit/agent/protocol.md`, `edit/agent/answers.json`, `edit/agent/thread.json`, or `edit/agent/job.json`.
+Do not read or write `edit/archive/`; it holds earlier attempts the user abandoned.
 Do not modify source videos. Do not write outside `edit/`.
 Do not run `render.py`, `transcribe.py`, `transcribe_batch.py`, or ffmpeg to produce the final video.
 Do not read or copy API keys.

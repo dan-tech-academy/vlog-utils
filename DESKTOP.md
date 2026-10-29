@@ -15,6 +15,8 @@ Chưa phải sản phẩm dùng được trọn vẹn. Cửa sổ mở được,
 - Agent được yêu cầu ghi `edit/agent/turn.json`. Nếu nó chỉ trả lời trong stdout, app tự lấy JSON hoặc đoạn văn đó và ghi file. Không còn báo `thiếu turn.json` như lỗi của user.
 - Hỏi đáp, duyệt chiến lược, rồi mới nhận EDL. Storyboard: xóa, sắp xếp, trim bám word (đệm 30–200ms). **Xuất final.mp4** chỉ bật sau preview.
 - Render vẫn là `helpers/render.py`. Preview rồi final. Phụ đề build bằng `--build-subtitles`.
+- Sidecar có sẵn lệnh để mở lại folder đúng bước đang dở: `project_status`, `save_thread` (ghi `edit/agent/thread.json`), `reset_project` (cất bản cũ vào `edit/archive/<giờ>/`, giữ transcript). UI chưa gọi các lệnh này; mở lại app vẫn bắt đầu từ chọn folder.
+- Giao diện mới dạng storyboard có góp ý từng cảnh mới ở dạng mockup: `apps/desktop/design/mockup.html`.
 - Không có UI làm animation HyperFrames, Remotion, Manim.
 
 ## Chạy
@@ -29,7 +31,7 @@ Cần `ffmpeg`, `ffprobe`, `uv`, và một CLI agent đã đăng nhập. Python 
 
 ## Kiểm tra đã chạy
 
-- `uv run --with pytest pytest desktop/tests` — 27 tests.
+- `uv run --with pytest pytest desktop/tests` — 36 tests.
 - `npm test` trong `apps/desktop` — 11 tests.
 - `npm run build` trong `apps/desktop` — TypeScript và Vite build được.
 - `cargo check` trong `apps/desktop/src-tauri` — compile được.
@@ -42,6 +44,7 @@ Chưa có một folder footage thật đi hết từ prompt đến `final.mp4` t
 - Nút **Phân tích** bị khóa im khi thiếu folder, video, hoặc prompt. Dòng dưới nút ghi lý do.
 - Key gõ trong ô không được gửi sang transcribe nếu chỉ lưu Keychain. Phân tích giờ tự lưu key đang dán.
 - Agent không ghi `turn.json` thì app báo thiếu file. App giờ tự ghi file từ câu trả lời, và chạy lại một lần nếu chưa có JSON.
+- Đóng app khi agent, transcribe hoặc render đang chạy thì tiến trình đó chạy tiếp sau khi app đã tắt. Sidecar giờ kill nó khi stdin đóng.
 
 ## Ngoài phạm vi
 

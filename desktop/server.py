@@ -28,18 +28,24 @@ from desktop.session import (
     apply_turn_side_effects,
     approve_strategy,
     build_prompt,
+    clear_job,
     install_protocol,
     load_state,
     load_turn,
+    mark_job,
+    project_status,
     readiness,
+    reset_project,
     save_state,
     write_answers,
     write_brief,
+    write_thread,
 )
 
 REPO = Path(__file__).resolve().parents[1]
 PROTOCOL = REPO / "desktop" / "AGENT_PROTOCOL.md"
 HELPERS = REPO / "helpers"
+TRACKED_JOBS = {"ingest", "agent_turn", "render"}
 
 
 def repo_root() -> Path:
@@ -56,6 +62,8 @@ class Hub:
         self.cancel_event = threading.Event()
         self.busy = False
         self.session_key = ""
+        self.closing = False
+        self.job_folder: Path | None = None
 
     def emit(self, msg: dict) -> None:
         with self._write_lock:
@@ -114,14 +122,37 @@ class Hub:
         return True
 
     def _run_job(self, msg: dict) -> None:
+        folder = None
         try:
+            if msg.get("cmd") in TRACKED_JOBS:
+                folder = self._folder(msg.get("folder"))
+                self.job_folder = folder
+                mark_job(folder, str(msg["cmd"]), msg.get("mode"))
             self.dispatch(msg)
         except Exception as exc:
             self._result(msg.get("id"), False, error=str(exc))
         finally:
+            # A job killed because the app quit keeps its marker so the next launch can report it.
+            if folder is not None and not self.closing:
+                clear_job(folder)
+            self.job_folder = None
             with self._proc_lock:
                 self.busy = False
             self.cancel_event.clear()
+
+    def shutdown(self) -> None:
+        self.closing = True
+        self.cancel_event.set()
+        self._kill()
+
+    def status(self, msg: dict) -> None:
+        folder = self._folder(msg.get("folder"))
+        running = self.busy and self.job_folder == folder
+        self._result(msg.get("id"), True, data=project_status(folder, running=running))
+
+    def save_thread(self, msg: dict) -> None:
+        path = write_thread(self._folder(msg.get("folder")), msg.get("thread"))
+        self._result(msg.get("id"), True, data={"path": str(path)})
 
     def dispatch(self, msg: dict) -> None:
         cmd = msg.get("cmd")
@@ -166,6 +197,10 @@ class Hub:
             return
         if cmd == "render":
             self.render(msg)
+            return
+        if cmd == "reset_project":
+            archive = reset_project(self._folder(msg.get("folder")))
+            self._result(req_id, True, data={"archive": str(archive) if archive else None})
             return
         self._result(req_id, False, error=f"lệnh không rõ: {cmd}")
 
@@ -628,8 +663,7 @@ def serve(hub: Hub | None = None) -> None:
     hub._emit_fn = emit
 
     def stop(_signum, _frame):
-        hub.cancel_event.set()
-        hub._kill()
+        hub.shutdown()
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, stop)
@@ -658,8 +692,19 @@ def serve(hub: Hub | None = None) -> None:
         if cmd == "cancel":
             hub.request_cancel(msg)
             continue
+        if cmd in {"project_status", "save_thread"}:
+            handler = hub.status if cmd == "project_status" else hub.save_thread
+            try:
+                handler(msg)
+            except (OSError, ValueError) as exc:
+                hub._result(msg.get("id"), False, error=str(exc))
+            continue
         if not hub.try_start(msg):
             hub._result(msg.get("id"), False, error="busy")
+
+    # stdin closes when the app exits, even on a crash or force quit. Children run in their
+    # own session, so they would outlive us unless killed here.
+    hub.shutdown()
 
 
 if __name__ == "__main__":

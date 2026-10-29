@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import time
+from datetime import datetime
 from pathlib import Path
 
 from desktop.edl_validate import validate_edl
+from desktop.media import list_videos, transcript_file
 
 
 class TurnError(ValueError):
@@ -68,6 +71,170 @@ def write_answers(folder: Path, answers: list[dict]) -> Path:
             clean.append({"id": qid, "prompt": prompt, "answer": text})
     path.write_text(json.dumps(clean, indent=2, ensure_ascii=False), encoding="utf-8")
     return path
+
+
+def _read_json(path: Path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def write_thread(folder: Path, thread) -> Path:
+    if not isinstance(thread, (dict, list)):
+        raise ValueError("thread phải là object hoặc list")
+    path = agent_dir(folder) / "thread.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Saved often and the app can quit mid-write; never leave a truncated file behind.
+    tmp = path.with_name("thread.json.tmp")
+    tmp.write_text(json.dumps(thread, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+    return path
+
+
+def mark_job(folder: Path, cmd: str, mode: str | None = None) -> None:
+    path = agent_dir(folder) / "job.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"cmd": cmd, "mode": mode, "started_at": time.time()}), encoding="utf-8")
+
+
+def clear_job(folder: Path) -> None:
+    (agent_dir(folder) / "job.json").unlink(missing_ok=True)
+
+
+ARCHIVED = (
+    "agent/state.json",
+    "agent/turn.json",
+    "agent/answers.json",
+    "agent/brief.md",
+    "agent/prompt.md",
+    "agent/thread.json",
+    "agent/job.json",
+    "edl.json",
+    "edl.render.json",
+    "preview.mp4",
+    "final.mp4",
+    "storyboard",
+)
+
+
+def reset_project(folder: Path) -> Path | None:
+    """Move the previous attempt into edit/archive/<stamp>/. Transcripts stay put."""
+    edit = folder / "edit"
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest = edit / "archive" / stamp
+    suffix = 1
+    while dest.exists():
+        suffix += 1
+        dest = edit / "archive" / f"{stamp}-{suffix}"
+    moved = False
+    for rel in ARCHIVED:
+        src = edit / rel
+        if not src.exists():
+            continue
+        target = dest / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        src.replace(target)
+        moved = True
+    return dest if moved else None
+
+
+def _fresh(output: Path, edl_path: Path) -> bool:
+    if not output.is_file():
+        return False
+    return not edl_path.is_file() or output.stat().st_mtime >= edl_path.stat().st_mtime
+
+
+def _phase(*, brief: str, packed: bool, state: dict, turn: dict | None, edl_ok: bool,
+           preview: bool, final: bool) -> str:
+    if not brief:
+        return "brief"
+    if not packed:
+        return "analyze"
+    if state.get("unexpected_writes") and not state.get("ignore_writes"):
+        return "blocked"
+    kind = turn["kind"] if turn else None
+    if kind == "questions":
+        return "questions"
+    if state.get("strategy_approved") and kind in {"edl", None}:
+        if not edl_ok:
+            return "agent"
+        if final:
+            return "exported"
+        return "preview" if preview else "board"
+    if kind == "strategy" or state.get("strategy"):
+        return "strategy"
+    return "agent"
+
+
+def project_status(folder: Path, *, running: bool = False) -> dict:
+    """Everything the app needs to reopen a folder at the step the user left it."""
+    edit = folder / "edit"
+    agent = agent_dir(folder)
+    brief_path = agent / "brief.md"
+    brief = brief_path.read_text(encoding="utf-8").strip() if brief_path.is_file() else ""
+    state = load_state(folder)
+    try:
+        turn = load_turn(folder)
+    except TurnError:
+        turn = None
+    job = None if running else _read_json(agent / "job.json")
+    interrupted = job if isinstance(job, dict) else None
+
+    edl_path = edit / "edl.json"
+    edl_info = None
+    if edl_path.is_file():
+        edl = _read_json(edl_path)
+        if isinstance(edl, dict):
+            validation = validate_edl(edl, edit, probe=False)
+            ranges = edl.get("ranges") if isinstance(edl.get("ranges"), list) else []
+            edl_info = {
+                "ok": validation.ok,
+                "ranges": len(ranges),
+                "total_duration_s": edl.get("total_duration_s"),
+                "errors": validation.errors,
+                "updated_at": edl_path.stat().st_mtime,
+            }
+        else:
+            edl_info = {"ok": False, "ranges": 0, "errors": ["edl.json không đọc được"],
+                        "updated_at": edl_path.stat().st_mtime}
+
+    outputs = {}
+    for mode in ("preview", "final"):
+        path = edit / f"{mode}.mp4"
+        cut_short = interrupted is not None and interrupted.get("cmd") == "render" and interrupted.get("mode") == mode
+        outputs[mode] = str(path) if _fresh(path, edl_path) and not cut_short else None
+
+    videos = list_videos(folder)
+    answers = _read_json(agent / "answers.json")
+    blocked = bool(state.get("unexpected_writes")) and not state.get("ignore_writes")
+    return {
+        "phase": _phase(
+            brief=brief,
+            packed=(edit / "takes_packed.md").is_file(),
+            state=state,
+            turn=turn,
+            edl_ok=bool(edl_info and edl_info["ok"]),
+            preview=outputs["preview"] is not None,
+            final=outputs["final"] is not None,
+        ),
+        "brief": brief,
+        "answers": answers if isinstance(answers, list) else [],
+        "turn": turn,
+        "strategy": state.get("strategy") or "",
+        "strategy_approved": bool(state.get("strategy_approved")),
+        "unexpected_writes": list(state.get("unexpected_writes") or []) if blocked else [],
+        "edl": edl_info,
+        "preview": outputs["preview"],
+        "preview_stale": outputs["preview"] is None and (edit / "preview.mp4").is_file(),
+        "final": outputs["final"],
+        "thread": _read_json(agent / "thread.json"),
+        "interrupted": interrupted,
+        "transcripts": {
+            "done": sum(1 for video in videos if transcript_file(edit, video).is_file()),
+            "total": len(videos),
+        },
+    }
 
 
 def install_protocol(folder: Path, source: Path) -> None:
