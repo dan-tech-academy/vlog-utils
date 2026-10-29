@@ -1,4 +1,4 @@
-export type Word = { start: number; end: number };
+export type Word = { start: number; end: number; text?: string };
 
 export type Range = {
   source: string;
