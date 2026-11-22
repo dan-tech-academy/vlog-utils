@@ -143,44 +143,50 @@ TRANSITIONS = {
 ZOOM_DEPTH = 1.35
 
 
-def video_effect_filter(effect: str | None, duration: float, w: int, h: int) -> str:
-    """Animated crop + rescale: a zoom for video sources without re-encoding loss."""
+def video_effect_filter(effect: str | None, duration: float, w: int, h: int,
+                        fps: float = 25.0) -> str:
+    """Animated zoom/pan for video via zoompan: crop sizes are evaluated once at
+    init, so crop cannot animate — zoompan re-evaluates per output frame.
+    The caller must pre-scale the input to ≥ ZOOM_DEPTH× the output canvas."""
     if not effect or effect == "static":
         return ""
-    dur = max(duration, 0.1)
+    frames = max(1, int(round(duration * fps)))
+    k = ZOOM_DEPTH - 1.0
+    n = max(1, frames - 1)  # on goes 0..frames-1
     if effect == "zoom_in":
-        z = f"min(1+{ZOOM_DEPTH - 1:.2f}*t/{dur:.3f},{ZOOM_DEPTH})"
-        return f"crop=w='iw/({z})':h='ih/({z})':x='(iw-ow)/2':y='(ih-oh)/2',scale={w}:{h},setsar=1"
-    if effect == "zoom_out":
-        z = f"max({ZOOM_DEPTH}-{ZOOM_DEPTH - 1:.2f}*t/{dur:.3f},1)"
-        return f"crop=w='iw/({z})':h='ih/({z})':x='(iw-ow)/2':y='(ih-oh)/2',scale={w}:{h},setsar=1"
-    if effect == "punch_in":
-        z = f"min(1+2.0*t,{ZOOM_DEPTH})"
-        return f"crop=w='iw/({z})':h='ih/({z})':x='(iw-ow)/2':y='(ih-oh)/2',scale={w}:{h},setsar=1"
+        z = f"min(1+{k:.2f}*on/{n},{ZOOM_DEPTH})"
+    elif effect == "zoom_out":
+        z = f"max({ZOOM_DEPTH}-{k:.2f}*on/{n},1)"
+    elif effect == "punch_in":
+        z = f"min(1+{2 * k:.2f}*on/{n},{ZOOM_DEPTH})"
+    elif effect in ("pan_left", "pan_right"):
+        z = f"{ZOOM_DEPTH}"
+    else:
+        return ""
     if effect == "pan_left":
-        return (
-            f"crop=w='iw/{ZOOM_DEPTH}':h='ih/{ZOOM_DEPTH}'"
-            f":x='(iw-ow)*min(t/{dur:.3f},1)':y='(ih-oh)/2',scale={w}:{h},setsar=1"
-        )
-    if effect == "pan_right":
-        return (
-            f"crop=w='iw/{ZOOM_DEPTH}':h='ih/{ZOOM_DEPTH}'"
-            f":x='(iw-ow)*(1-min(t/{dur:.3f},1))':y='(ih-oh)/2',scale={w}:{h},setsar=1"
-        )
-    return ""
+        x = f"(iw-ow)*min(on/{n},1)"
+    elif effect == "pan_right":
+        x = f"(iw-ow)*(1-min(on/{n},1))"
+    else:
+        x = "(iw-ow)/2"
+    return (
+        f"zoompan=z='{z}':x='{x}':y='(ih-oh)/2'"
+        f":d=1:s={w}x{h}:fps={fps:g}"
+    )
 
 
 def image_effect_filter(effect: str | None, w: int, h: int, frames: int = 1, fps: float = 25.0) -> str:
     """zoompan expression for a still: input is pre-scaled to 2× the canvas.
 
     `d`/`fps` are not usable inside zoompan expressions, so the frame count and
-    rate are baked into each expression as constants.
+    rate are baked into each expression as constants. `static` still routes
+    through zoompan (z=1) so a lone input frame expands to `frames` outputs.
     """
-    if not effect or effect == "static":
-        return ""
     d = max(frames, 1)
     cx = "'iw/2-(iw/zoom/2)'"
     cy = "'ih/2-(ih/zoom/2)'"
+    if not effect or effect == "static":
+        return f"zoompan=z='1':x={cx}:y={cy}:s={w}x{h}"
     if effect == "zoom_in":
         return f"zoompan=z='min(1+{ZOOM_DEPTH - 1:.2f}*on/{d},{ZOOM_DEPTH})':x={cx}:y={cy}:s={w}x{h}"
     if effect == "zoom_out":
@@ -422,16 +428,26 @@ def extract_segment(
         else:
             scale = "scale=-2:1920" if portrait else "scale=1920:-2"
 
+    out_rate = rate if rate is not None else (probe_source_fps(source) or "24")
+
     vf_parts: list[str] = []
     if is_hdr_source(source):
         vf_parts.append(TONEMAP_CHAIN)
-    vf_parts.append(scale)
+    if canvas is not None and video_effect_filter(effect, duration, *canvas,
+                                                 fps=float(Fraction(out_rate))):
+        # zoompan needs headroom above the canvas to move inside; cover-scale to
+        # ZOOM_DEPTH× then animate the window.
+        zw = int(w * ZOOM_DEPTH)
+        zh = int(h * ZOOM_DEPTH)
+        vf_parts.append(
+            f"scale={zw}:{zh}:force_original_aspect_ratio=increase,"
+            f"crop={zw}:{zh},"
+            f"{video_effect_filter(effect, duration, w, h, fps=float(Fraction(out_rate)))}"
+        )
+    else:
+        vf_parts.append(scale)
     if grade_filter:
         vf_parts.append(grade_filter)
-    if canvas is not None:
-        effect_filter = video_effect_filter(effect, duration, *canvas)
-        if effect_filter:
-            vf_parts.append(effect_filter)
     vf = ",".join(vf_parts)
 
     # 30ms audio fades at both edges (Rule 3) — prevent pops
@@ -444,12 +460,6 @@ def extract_segment(
         preset, crf = "medium", "22"
     else:
         preset, crf = "fast", "20"
-
-    # Frame rate: use the rate the caller resolved once for the whole render
-    # (every segment must share it — concat -c copy in Rule 2 requires a uniform
-    # frame rate). When called standalone with no rate, preserve this source's
-    # own rate; fall back to 24 only if it can't be probed.
-    out_rate = rate if rate is not None else (probe_source_fps(source) or "24")
 
     cmd = [
         "ffmpeg", "-y",
@@ -494,10 +504,7 @@ def extract_image_segment(
         f"crop={w * 2}:{h * 2}",
     ]
     motion = image_effect_filter(effect, w, h, frames, fps)
-    if motion:
-        vf_parts.append(f"{motion}:d={frames}:fps={fps:g}")
-    else:
-        vf_parts.append(f"scale={w}:{h},setsar=1")
+    vf_parts.append(f"{motion}:d={frames}:fps={fps:g}")
     if grade_filter:
         vf_parts.append(grade_filter)
     vf_parts.append("format=yuv420p")
@@ -1019,6 +1026,14 @@ def apply_loudnorm_two_pass(
     print(f"    measured: I={measurement['input_i']} LUFS  "
           f"TP={measurement['input_tp']}  LRA={measurement['input_lra']}")
 
+    # Pure silence measures -inf — loudnorm can't normalize it, so don't try.
+    if "-inf" in (str(measurement["input_i"]), str(measurement["input_tp"])):
+        print("    silent track — copying audio as-is")
+        run(["ffmpeg", "-y", "-i", str(input_path), "-c:v", "copy",
+             "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+             "-movflags", "+faststart", str(output_path)], quiet=True)
+        return True
+
     filter_str = (
         f"loudnorm=I={LOUDNORM_I}:TP={LOUDNORM_TP}:LRA={LOUDNORM_LRA}"
         f":measured_I={measurement['input_i']}"
@@ -1057,7 +1072,11 @@ def build_final_composite(
     If there are no overlays and no subtitles, just copy base to out.
     """
     has_overlays = bool(overlays)
-    has_subs = subtitles_path is not None and subtitles_path.exists()
+    has_subs = (
+        subtitles_path is not None
+        and subtitles_path.exists()
+        and subtitles_path.stat().st_size > 0
+    )
 
     if not has_overlays and not has_subs:
         # Nothing to do — just rename/copy base to final name
