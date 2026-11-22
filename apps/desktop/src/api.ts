@@ -38,6 +38,35 @@ export type VideoItem = {
   poster: string | null;
 };
 
+export type ImageItem = {
+  name: string;
+  path: string;
+  size: number;
+  width: number | null;
+  height: number | null;
+};
+
+export type AudioItem = {
+  name: string;
+  path: string;
+  size: number;
+  duration: number | null;
+};
+
+export type DocItem = {
+  name: string;
+  path: string;
+  size: number;
+  preview: string;
+};
+
+export type Inventory = {
+  videos: VideoItem[];
+  images: ImageItem[];
+  audio: AudioItem[];
+  docs: DocItem[];
+};
+
 export type Validation = {
   ok: boolean;
   errors: string[];
@@ -70,11 +99,17 @@ export type ClipItem = {
   poster: string | null;
 };
 
+export type AudioBlock = {
+  music?: { source: string; volume?: number; fade_in_s?: number; fade_out_s?: number };
+  sfx?: Array<{ source: string; at_s: number; volume?: number }>;
+};
+
 export type StoryboardData = {
-  edl: { ranges: Range[]; grade?: string; total_duration_s?: number };
+  edl: { ranges: Range[]; grade?: string; audio?: AudioBlock; total_duration_s?: number };
   validation: Validation;
   words: Record<string, Word[]>;
   durations: Record<string, number>;
+  source_kinds?: Record<string, "video" | "image" | "audio" | "doc">;
   strategy: string;
 };
 

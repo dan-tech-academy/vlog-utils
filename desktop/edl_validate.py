@@ -11,9 +11,20 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from desktop.media import KIND_AUDIO, KIND_DOC, KIND_IMAGE, asset_kind
+
 PAD_MIN = 0.03
 PAD_MAX = 0.20
 EPS = 0.001
+
+EFFECTS = {"static", "zoom_in", "zoom_out", "pan_left", "pan_right", "punch_in"}
+TRANSITIONS = {
+    "fade", "dissolve", "wipeleft", "wiperight", "wipeup", "wipedown",
+    "slideleft", "slideright", "slideup", "slidedown",
+    "circleopen", "circleclose", "fadeblack", "fadewhite",
+}
+TRANSITION_MIN_S = 0.1
+TRANSITION_MAX_S = 3.0
 
 
 @dataclass
@@ -146,6 +157,51 @@ def validate_edl(
                 f"Khóa nguồn {key} phải trùng tên file {source_path.stem} để phụ đề khớp transcript."
             )
 
+        kind = asset_kind(source_path)
+        if kind in (KIND_AUDIO, KIND_DOC):
+            errors.append(f"{label}: nguồn {key} là {kind}, không thể là cảnh trong video.")
+            continue
+
+        effect = raw.get("effect")
+        if effect is not None and str(effect) not in EFFECTS:
+            errors.append(
+                f"{label}: effect '{effect}' không hợp lệ (cho phép: {', '.join(sorted(EFFECTS))})."
+            )
+
+        seg_grade = raw.get("grade")
+        if seg_grade is not None and not str(seg_grade).strip():
+            errors.append(f"{label}: grade không được rỗng.")
+
+        transition = raw.get("transition_in")
+        if transition is not None:
+            if index == 0:
+                errors.append(f"{label}: transition_in chỉ đặt trên cảnh thứ hai trở đi.")
+            elif not isinstance(transition, dict):
+                errors.append(f"{label}: transition_in phải là object.")
+            else:
+                ttype = str(transition.get("type") or "")
+                if ttype not in TRANSITIONS:
+                    errors.append(
+                        f"{label}: transition '{ttype}' không hỗ trợ (cho phép: {', '.join(sorted(TRANSITIONS))})."
+                    )
+                try:
+                    tdur = float(transition.get("duration_s"))
+                except (TypeError, ValueError):
+                    errors.append(f"{label}: transition_in thiếu duration_s.")
+                    tdur = None
+                if tdur is not None and not (TRANSITION_MIN_S <= tdur <= TRANSITION_MAX_S):
+                    errors.append(
+                        f"{label}: transition {tdur:.2f}s ngoài cửa sổ {TRANSITION_MIN_S}–{TRANSITION_MAX_S}s."
+                    )
+                if tdur is not None:
+                    prev = ranges[index - 1]
+                    prev_dur = float(prev.get("end", 0)) - float(prev.get("start", 0))
+                    if tdur >= min(end - start, prev_dur):
+                        errors.append(f"{label}: transition dài hơn cảnh cạnh nó.")
+
+        if kind == KIND_IMAGE:
+            continue
+
         words, found = load_words(edit_dir, key)
         if not found:
             errors.append(f"Thiếu transcript cho {key}.")
@@ -193,6 +249,75 @@ def validate_edl(
             errors.append(
                 f"Đệm cuối {pad_out * 1000:.0f}ms của {key} ngoài cửa sổ 30–200ms."
             )
+
+    audio = edl.get("audio")
+    if audio is not None:
+        if not isinstance(audio, dict):
+            errors.append("audio phải là một object.")
+        else:
+            total = 0.0
+            for index, row in enumerate(ranges):
+                if isinstance(row, dict):
+                    try:
+                        total += float(row["end"]) - float(row["start"])
+                    except (KeyError, TypeError, ValueError):
+                        pass
+            music = audio.get("music")
+            if music is not None:
+                if not isinstance(music, dict):
+                    errors.append("audio.music phải là object.")
+                else:
+                    mkey = music.get("source")
+                    mpath = sources.get(mkey)
+                    mkind = asset_kind(_resolve(str(mpath), edit_dir)) if mpath else None
+                    if not isinstance(mkey, str) or mkey not in sources:
+                        errors.append("audio.music.source không có trong sources.")
+                    elif mkind != KIND_AUDIO:
+                        errors.append(f"audio.music.source {mkey} không phải file âm thanh.")
+                    try:
+                        vol = float(music.get("volume", 0.25))
+                        if not 0.0 <= vol <= 1.0:
+                            errors.append("audio.music.volume ngoài 0–1.")
+                    except (TypeError, ValueError):
+                        errors.append("audio.music.volume không hợp lệ.")
+                    for fade_key in ("fade_in_s", "fade_out_s"):
+                        if music.get(fade_key) is not None:
+                            try:
+                                if float(music[fade_key]) < 0:
+                                    errors.append(f"audio.music.{fade_key} phải ≥ 0.")
+                            except (TypeError, ValueError):
+                                errors.append(f"audio.music.{fade_key} không hợp lệ.")
+            sfx = audio.get("sfx")
+            if sfx is not None:
+                if not isinstance(sfx, list):
+                    errors.append("audio.sfx phải là list.")
+                else:
+                    for sindex, item in enumerate(sfx):
+                        label = f"audio.sfx[{sindex}]"
+                        if not isinstance(item, dict):
+                            errors.append(f"{label} không phải object.")
+                            continue
+                        skey = item.get("source")
+                        spath = sources.get(skey)
+                        skind = asset_kind(_resolve(str(spath), edit_dir)) if spath else None
+                        if not isinstance(skey, str) or skey not in sources:
+                            errors.append(f"{label}: source không có trong sources.")
+                        elif skind != KIND_AUDIO:
+                            errors.append(f"{label}: {skey} không phải file âm thanh.")
+                        try:
+                            at = float(item.get("at_s"))
+                            if at < 0:
+                                errors.append(f"{label}: at_s phải ≥ 0.")
+                            elif total and at > total:
+                                warnings.append(f"{label}: đặt sau cuối video ({at:.1f}s > {total:.1f}s).")
+                        except (TypeError, ValueError):
+                            errors.append(f"{label}: at_s không hợp lệ.")
+                        if item.get("volume") is not None:
+                            try:
+                                if not 0.0 <= float(item["volume"]) <= 1.0:
+                                    errors.append(f"{label}: volume ngoài 0–1.")
+                            except (TypeError, ValueError):
+                                errors.append(f"{label}: volume không hợp lệ.")
 
     kept_overlays: list[dict] = []
     overlays = edl.get("overlays") or []

@@ -105,14 +105,15 @@ export function MainPane(props: Props) {
             <span className="big"><Icon name="folder" /></span>
             <h2>Mở folder footage</h2>
             <p>
-              Kéo folder từ Finder vào đây, hoặc chọn bằng nút bên dưới. App chỉ đọc video, mọi file làm ra nằm
-              trong <span className="mono">edit/</span> của folder đó.
+              Kéo folder từ Finder vào đây, hoặc chọn bằng nút bên dưới. App đọc video, ảnh, nhạc/SFX và file
+              kịch bản — mọi file làm ra nằm trong <span className="mono">edit/</span> của folder đó.
             </p>
             <button type="button" className="btn primary lg" onClick={props.onPick}>
               <Icon name="folder" />Chọn folder…
             </button>
             <div className="exts">
-              <span>.mp4</span><span>.mov</span><span>.mkv</span><span>.avi</span><span>.m4v</span>
+              <span>.mp4</span><span>.mov</span><span>.mkv</span><span>.jpg</span><span>.png</span><span>.webp</span>
+              <span>.mp3</span><span>.wav</span><span>.m4a</span><span>.md</span>
             </div>
           </div>
         </div>

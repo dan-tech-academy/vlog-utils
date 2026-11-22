@@ -7,6 +7,9 @@ export type Range = {
   beat?: string;
   quote?: string;
   reason?: string;
+  effect?: string;
+  grade?: string;
+  transition_in?: { type: string; duration_s: number };
 };
 
 export function round3(value: number): number {

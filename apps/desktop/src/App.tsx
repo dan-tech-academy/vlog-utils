@@ -12,8 +12,12 @@ import {
   setMediaRoot,
   sidecar,
   type AgentPayload,
+  type AudioItem,
   type ClipItem,
   type Deps,
+  type DocItem,
+  type ImageItem,
+  type Inventory,
   type Progress,
   type SidecarMessage,
   type StoryboardData,
@@ -66,7 +70,8 @@ const CANCELLED = "đã hủy";
 const BRIEF_CHIPS = ["Cắt ờ ừ", "Khoảng 1 phút", "16:9", "9:16", "Có phụ đề", "Tông ấm"];
 const BOARD_CHIPS = ["Gọn hơn", "Nhịp nhanh hơn", "Bỏ đoạn lặp ý"];
 
-type Board = { ranges: Range[]; words: Words; grade: string; validation: Validation };
+type Board = { ranges: Range[]; words: Words; grade: string; validation: Validation; sourceKinds: Record<string, string> };
+type Extras = { images: ImageItem[]; audio: AudioItem[]; docs: DocItem[] };
 type Failure = { text: string; detail?: string; retry?: { label: string; run: () => void } };
 type AgentOpts = {
   title: string;
@@ -144,6 +149,7 @@ export function App() {
 
   const [folder, setFolder] = useState<string | null>(null);
   const [videos, setVideos] = useState<VideoItem[] | null>(null);
+  const [extras, setExtras] = useState<Extras>({ images: [], audio: [], docs: [] });
   const [posters, setPosters] = useState<Record<string, string>>({});
   const [project, setProject] = useState<Project | null>(null);
   const [thread, dispatch] = useReducer(threadReducer, undefined, emptyThread);
@@ -339,10 +345,17 @@ export function App() {
       setFailure({ text: "Không đọc được folder", detail: result.error });
       return;
     }
-    const rows = (result.data as { videos?: VideoItem[] } | undefined)?.videos || [];
+    const data = (result.data as Inventory | undefined) || { videos: [], images: [], audio: [], docs: [] };
+    const rows = data.videos || [];
     setVideos(rows);
+    setExtras({ images: data.images || [], audio: data.audio || [], docs: data.docs || [] });
+    const posterPaths = [
+      ...rows.map((row) => [row.path, row.poster] as const),
+      // Images show themselves as the poster.
+      ...(data.images || []).map((row) => [row.path, row.path] as const),
+    ];
     const entries = await Promise.all(
-      rows.map(async (row) => [row.path, row.poster ? await mediaUrl(row.poster).catch(() => "") : ""] as const),
+      posterPaths.map(async ([path, poster]) => [path, poster ? await mediaUrl(poster).catch(() => "") : ""] as const),
     );
     setPosters(Object.fromEntries(entries.filter(([, url]) => url)));
   }
@@ -362,6 +375,7 @@ export function App() {
       words: data.words || {},
       grade: data.edl.grade || "",
       validation: data.validation,
+      sourceKinds: data.source_kinds || {},
     });
     return data;
   }
@@ -427,6 +441,7 @@ export function App() {
     setProgress(null);
     setProject(null);
     setVideos(null);
+    setExtras({ images: [], audio: [], docs: [] });
     setPosters({});
     dispatch({ type: "load", thread: emptyThread() });
     folderRef.current = path;
@@ -526,10 +541,13 @@ export function App() {
     setFailure(null);
     setResume(null);
     const pending = (videos || []).filter((video) => !video.cached).length;
+    const otherCount = extras.images.length + extras.audio.length + extras.docs.length;
     setBusy({
       kind: "ingest",
       title: pending ? "Transcribe footage" : "Đọc transcript có sẵn",
-      sub: pending ? `${pending} video cần transcribe` : "Không tốn thêm tiền ElevenLabs",
+      sub: pending
+        ? `${pending} video cần transcribe`
+        : videos?.length ? "Không tốn thêm tiền ElevenLabs" : "Phân tích ảnh / nhạc / kịch bản",
       t0: Date.now(),
     });
     const result = await job("ingest", { folder: path });
@@ -542,20 +560,20 @@ export function App() {
       return;
     }
     if (!result.ok) {
-      setFailure({ text: "Transcribe lỗi", detail: result.error, retry: { label: "Thử lại", run: () => void analyze(path) } });
+      setFailure({ text: "Phân tích lỗi", detail: result.error, retry: { label: "Thử lại", run: () => void analyze(path) } });
       await refresh(path);
       return;
     }
-    const data = result.data as { videos?: number; transcribed?: number } | undefined;
+    const data = result.data as { videos?: number; transcribed?: number; extras?: number } | undefined;
+    const pieces = [
+      data?.transcribed
+        ? `Transcribe xong ${data.transcribed} video · ${data.videos} video có transcript`
+        : videos?.length ? `Dùng transcript có sẵn của ${data?.videos ?? 0} video` : null,
+      (data?.extras ?? otherCount) ? `${data?.extras ?? otherCount} tài nguyên khác` : null,
+    ].filter(Boolean);
     dispatch({
       type: "push",
-      items: [{
-        k: "ev",
-        icon: "wave",
-        text: data?.transcribed
-          ? `Transcribe xong ${data.transcribed} video · ${data.videos} video có transcript`
-          : `Dùng transcript có sẵn của ${data?.videos ?? 0} video`,
-      }],
+      items: [{ k: "ev", icon: "wave", text: pieces.join(" · ") || "Đã phân tích tài nguyên" }],
     });
     await ask(path, "", { title: `${agentLabel} đang đọc transcript` });
   }
@@ -816,7 +834,9 @@ export function App() {
   }
 
   function colorOf(source: string): string {
-    const index = (videos || []).findIndex((video) => videoStem(video.name) === source);
+    let index = (videos || []).findIndex((video) => videoStem(video.name) === source);
+    if (index < 0) index = extras.images.findIndex((image) => videoStem(image.name) === source);
+    if (index < 0) index = extras.audio.findIndex((track) => videoStem(track.name) === source);
     return `var(--s${((index >= 0 ? index : 0) % 6) + 1})`;
   }
 
@@ -840,7 +860,9 @@ export function App() {
     }
     if (!deps.ffmpeg.found || !deps.ffprobe.found) return "Thiếu ffmpeg. Cài bằng brew install ffmpeg rồi mở lại app.";
     if (videos === null) return "Đang đọc folder…";
-    if (!videos.length) return "Folder này không có video ở cấp trên cùng (.mp4, .mov, .mkv, .avi, .m4v).";
+    if (!videos.length && !extras.images.length && !extras.audio.length && !extras.docs.length) {
+      return "Folder này không có tài nguyên ở cấp trên cùng — video, ảnh, nhạc hay file kịch bản.";
+    }
     if (videos.some((video) => !video.cached) && !hasKey) {
       return (
         <>
@@ -1128,6 +1150,7 @@ export function App() {
       <Storyboard
         ranges={ranges}
         words={board.words}
+        sourceKinds={board.sourceKinds}
         colorOf={colorOf}
         clips={clips}
         clipsRunning={clipsRunning}
@@ -1148,7 +1171,14 @@ export function App() {
   } else if (shownView === "board") {
     body = <StoryboardSkeleton />;
   } else {
-    body = <Footage videos={videos || []} posters={posters} ranges={ranges} transcribing={busy?.kind === "ingest"} />;
+    body = (
+      <Footage
+        assets={{ videos: videos || [], ...extras }}
+        posters={posters}
+        ranges={ranges}
+        transcribing={busy?.kind === "ingest"}
+      />
+    );
   }
 
   const sceneSet = new Set(drafts.map((item) => item.index)).size;
@@ -1176,7 +1206,7 @@ export function App() {
           folder={folder}
           view={shownView}
           sceneCount={board ? ranges.length : null}
-          videoCount={videos?.length ?? 0}
+          videoCount={(videos?.length ?? 0) + extras.images.length + extras.audio.length + extras.docs.length}
           stat={stat}
           stale={Boolean(project?.previewStale)}
           previewReady={Boolean(project?.preview)}

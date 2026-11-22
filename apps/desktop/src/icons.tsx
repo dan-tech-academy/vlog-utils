@@ -65,6 +65,27 @@ const ICONS = {
       <path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4" />
     </>
   ),
+  image: (
+    <>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <circle cx="8.5" cy="10" r="1.5" {...solid} />
+      <path d="m4 17 5-6 4 4 3-3 4 5" />
+    </>
+  ),
+  music: (
+    <>
+      <path d="M9 18.5V6l11-2v11.5" />
+      <circle cx="6.5" cy="18.5" r="2.5" />
+      <circle cx="17.5" cy="15.5" r="2.5" />
+    </>
+  ),
+  doc: (
+    <>
+      <path d="M6 3h8l4 4v14H6z" />
+      <path d="M9 11h6M9 15h6" />
+    </>
+  ),
+  transition: <path d="M4 12h6m4 0h6M12 4v16" />,
   wave: <path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2" />,
   copy: (
     <>

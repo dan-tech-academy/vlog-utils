@@ -106,6 +106,108 @@ def test_short_tail_at_eof_is_allowed(tmp_path):
     assert result.ok, result.errors
 
 
+def _image_fixture(tmp_path: Path, ranges, *, audio=None):
+    image = tmp_path / "cover.png"
+    image.write_bytes(b"png-ish")
+    sources = {image.stem: str(image)}
+    edl = {
+        "version": 1,
+        "sources": sources,
+        "ranges": ranges,
+    }
+    if audio is not None:
+        edl["audio"] = audio
+    return tmp_path / "edit", edl
+
+
+def test_image_range_needs_no_transcript(tmp_path):
+    edit, edl = _image_fixture(
+        tmp_path,
+        [{"source": "cover", "start": 0, "end": 3.0, "effect": "zoom_in"}],
+    )
+    edit.mkdir(exist_ok=True)
+    result = validate_edl(edl, edit, probe=False)
+    assert result.ok, result.errors
+
+
+def test_audio_source_in_ranges_is_rejected(tmp_path):
+    track = tmp_path / "bed.mp3"
+    track.write_bytes(b"mp3-ish")
+    edit = tmp_path / "edit"
+    edit.mkdir()
+    edl = {
+        "version": 1,
+        "sources": {"bed": str(track)},
+        "ranges": [{"source": "bed", "start": 0, "end": 3.0}],
+    }
+    result = validate_edl(edl, edit, probe=False)
+    assert not result.ok
+    assert any("audio" in error for error in result.errors)
+
+
+def test_transition_on_first_range_is_rejected(tmp_path):
+    edit, edl = _image_fixture(
+        tmp_path,
+        [{"source": "cover", "start": 0, "end": 3.0, "transition_in": {"type": "fade", "duration_s": 0.5}}],
+    )
+    edit.mkdir(exist_ok=True)
+    result = validate_edl(edl, edit, probe=False)
+    assert not result.ok
+    assert any("transition_in" in error for error in result.errors)
+
+
+def test_bad_transition_type_and_duration(tmp_path):
+    edit, edl = _image_fixture(
+        tmp_path,
+        [
+            {"source": "cover", "start": 0, "end": 3.0},
+            {"source": "cover", "start": 0, "end": 2.0, "transition_in": {"type": "spin", "duration_s": 9.0}},
+        ],
+    )
+    edit.mkdir(exist_ok=True)
+    result = validate_edl(edl, edit, probe=False)
+    assert not result.ok
+    assert any("transition" in error for error in result.errors)
+
+
+def test_bad_effect_is_rejected(tmp_path):
+    edit, edl = _image_fixture(
+        tmp_path,
+        [{"source": "cover", "start": 0, "end": 3.0, "effect": "explode"}],
+    )
+    edit.mkdir(exist_ok=True)
+    result = validate_edl(edl, edit, probe=False)
+    assert not result.ok
+    assert any("effect" in error for error in result.errors)
+
+
+def test_music_must_point_at_audio_source(tmp_path):
+    edit, edl = _image_fixture(
+        tmp_path,
+        [{"source": "cover", "start": 0, "end": 3.0}],
+        audio={"music": {"source": "cover", "volume": 0.5}},
+    )
+    edit.mkdir(exist_ok=True)
+    result = validate_edl(edl, edit, probe=False)
+    assert not result.ok
+    assert any("audio.music.source" in error for error in result.errors)
+
+
+def test_sfx_after_end_warns_only(tmp_path):
+    track = tmp_path / "ding.wav"
+    track.write_bytes(b"wav-ish")
+    edit, edl = _image_fixture(
+        tmp_path,
+        [{"source": "cover", "start": 0, "end": 3.0}],
+        audio={"sfx": [{"source": "ding", "at_s": 99.0, "volume": 0.5}]},
+    )
+    edl["sources"]["ding"] = str(track)
+    edit.mkdir(exist_ok=True)
+    result = validate_edl(edl, edit, probe=False)
+    assert result.ok, result.errors
+    assert result.warnings
+
+
 def test_save_ranges_rejects_inside_word_without_writing(tmp_path):
     from desktop.server import Hub
 

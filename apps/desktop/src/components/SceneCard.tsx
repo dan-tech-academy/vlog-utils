@@ -10,6 +10,8 @@ const COMMENT_CHIPS = ["Ngắn lại", "Bỏ cảnh này", "Giữ thêm ở cu�
 type Props = {
   index: number;
   range: Range;
+  /** "video" | "image" | "audio" | "doc" — from the sidecar's source_kinds map. */
+  kind?: string;
   words: Words;
   color: string;
   media: ClipUrls | undefined;
@@ -141,6 +143,19 @@ export function SceneCard(props: Props) {
           <div className="frame empty" />
         )}
         <span className="num mono">{pad2(index + 1)}</span>
+        {(range.effect || range.transition_in || props.kind === "image") && (
+          <span className="fx">
+            {props.kind === "image" && <span className="tag">ẢNH</span>}
+            {range.effect && range.effect !== "static" && (
+              <span className="tag" title={`Hiệu ứng: ${range.effect}`}>{range.effect}</span>
+            )}
+            {range.transition_in && (
+              <span className="tag" title={`Chuyển cảnh: ${range.transition_in.type} ${range.transition_in.duration_s}s`}>
+                →{range.transition_in.type}
+              </span>
+            )}
+          </span>
+        )}
         {props.changed && (
           <span className="chg" title={props.changed}>
             <Icon name="sparkle" />
