@@ -195,8 +195,13 @@ def validate_edl(
                     )
                 if tdur is not None:
                     prev = ranges[index - 1]
-                    prev_dur = float(prev.get("end", 0)) - float(prev.get("start", 0))
-                    if tdur >= min(end - start, prev_dur):
+                    prev_dur = None
+                    if isinstance(prev, dict):
+                        try:
+                            prev_dur = float(prev.get("end", 0)) - float(prev.get("start", 0))
+                        except (TypeError, ValueError):
+                            prev_dur = None
+                    if prev_dur is not None and tdur >= min(end - start, prev_dur):
                         errors.append(f"{label}: transition dài hơn cảnh cạnh nó.")
 
         if kind == KIND_IMAGE:
@@ -268,12 +273,12 @@ def validate_edl(
                     errors.append("audio.music phải là object.")
                 else:
                     mkey = music.get("source")
-                    mpath = sources.get(mkey)
-                    mkind = asset_kind(_resolve(str(mpath), edit_dir)) if mpath else None
                     if not isinstance(mkey, str) or mkey not in sources:
                         errors.append("audio.music.source không có trong sources.")
-                    elif mkind != KIND_AUDIO:
-                        errors.append(f"audio.music.source {mkey} không phải file âm thanh.")
+                    else:
+                        mkind = asset_kind(_resolve(str(sources[mkey]), edit_dir))
+                        if mkind != KIND_AUDIO:
+                            errors.append(f"audio.music.source {mkey} không phải file âm thanh.")
                     try:
                         vol = float(music.get("volume", 0.25))
                         if not 0.0 <= vol <= 1.0:
@@ -298,11 +303,9 @@ def validate_edl(
                             errors.append(f"{label} không phải object.")
                             continue
                         skey = item.get("source")
-                        spath = sources.get(skey)
-                        skind = asset_kind(_resolve(str(spath), edit_dir)) if spath else None
                         if not isinstance(skey, str) or skey not in sources:
                             errors.append(f"{label}: source không có trong sources.")
-                        elif skind != KIND_AUDIO:
+                        elif asset_kind(_resolve(str(sources[skey]), edit_dir)) != KIND_AUDIO:
                             errors.append(f"{label}: {skey} không phải file âm thanh.")
                         try:
                             at = float(item.get("at_s"))
