@@ -306,6 +306,8 @@ Match the source unless the user asked for something specific. Common targets: `
 
 `grade` is a preset name or raw ffmpeg filter. `overlays` are rendered animation clips. `subtitles` is optional and applied LAST.
 
+v2 fields (desktop app): ranges may also carry `effect` (`static|zoom_in|zoom_out|pan_left|pan_right|punch_in`), `transition_in` (`{type, duration_s}` — xfade types: fade, dissolve, wipe/slide in four directions, circleopen/close, fadeblack/white), and a per-range `grade`. `sources` may point at images (use `start:0, end:<display seconds>`) and audio files; a top-level `audio` block holds `music` (source/volume/fade_in_s/fade_out_s) and `sfx` (source/at_s/volume). See `desktop/AGENT_PROTOCOL.md`.
+
 ## Memory — `project.md`
 
 Append one section per session at `<edit>/project.md`:

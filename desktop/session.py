@@ -211,7 +211,7 @@ def project_status(folder: Path, *, running: bool = False) -> dict:
     return {
         "phase": _phase(
             brief=brief,
-            packed=(edit / "takes_packed.md").is_file(),
+            packed=(edit / "takes_packed.md").is_file() or (edit / "assets.md").is_file(),
             state=state,
             turn=turn,
             edl_ok=bool(edl_info and edl_info["ok"]),
@@ -248,7 +248,8 @@ def build_prompt(state: dict, note: str) -> str:
     extra = note.strip() or "(none)"
     return (
         "Edit the footage in the working directory.\n"
-        "Read edit/agent/protocol.md, edit/agent/brief.md, edit/takes_packed.md, "
+        "Read edit/agent/protocol.md, edit/agent/brief.md, edit/assets.md, "
+        "edit/takes_packed.md if it exists, "
         "and edit/agent/answers.json if that file exists.\n"
         f"strategy_approved: {approved}\n"
         "If strategy_approved is false, do not write edl.json. "

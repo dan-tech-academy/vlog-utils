@@ -196,6 +196,13 @@ button.proj:hover:not(:disabled) { background: var(--raised); }
 .mscroll { position: relative; overflow-y: auto; padding: var(--space-5) var(--space-5) 96px; }
 .mscroll.center { display: grid; place-items: center; padding: var(--space-5); }
 .grid3 { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: var(--space-4); align-items: start; }
+.fsec { display: flex; align-items: center; gap: 8px; margin: var(--space-4) 0 var(--space-3); font-size: var(--text-sm); font-weight: 600; color: var(--text-subtle); }
+.fsec:first-child { margin-top: 0; }
+.pv.audio, .pv.doc { display: flex; align-items: center; justify-content: center; }
+.pv.audio .big, .pv.doc .big { font-size: 28px; color: var(--text-subtle); }
+.pv.audio .big .i, .pv.doc .big .i { width: 28px; height: 28px; }
+.scard .fx { display: flex; gap: 4px; position: absolute; top: 8px; right: 8px; }
+.scard .fx .tag { font-family: var(--font-mono); font-size: var(--text-xs); background: rgba(0,0,0,0.55); color: #fff; border-radius: 4px; padding: 1px 6px; backdrop-filter: blur(2px); }
 .notice {
   display: flex; align-items: center; gap: 10px; margin-bottom: var(--space-4);
   padding: 10px 14px; border-radius: var(--radius-lg);

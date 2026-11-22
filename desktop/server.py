@@ -15,7 +15,7 @@ from pathlib import Path
 from desktop.agents import agent_env, build_argv, parse_session_id
 from desktop.deps import binary_for, check_deps
 from desktop.edl_validate import load_word_entries, probe_duration, validate_edl
-from desktop.media import list_videos, transcript_file
+from desktop.media import KIND_AUDIO, KIND_DOC, KIND_IMAGE, KIND_VIDEO, asset_kind, list_assets, list_videos, transcript_file
 from desktop.scan import repo_changes, repo_snapshot, snapshot, unexpected_writes
 from desktop.turn_recover import (
     agent_failure_message,
@@ -47,6 +47,16 @@ REPO = Path(__file__).resolve().parents[1]
 PROTOCOL = REPO / "desktop" / "AGENT_PROTOCOL.md"
 HELPERS = REPO / "helpers"
 TRACKED_JOBS = {"ingest", "agent_turn", "render"}
+
+
+def _render_helper():
+    """Lazy-load helpers/render.py (not a package) for effect filter strings."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("vlog_render", HELPERS / "render.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def repo_root() -> Path:
@@ -162,7 +172,7 @@ class Hub:
             self._result(req_id, True, data=check_deps(include_login=bool(msg.get("include_login"))))
             return
         if cmd == "inventory":
-            self._result(req_id, True, data={"videos": self.inventory(msg)})
+            self._result(req_id, True, data=self.inventory(msg))
             return
         if cmd == "save_brief":
             path = write_brief(self._folder(msg.get("folder")), str(msg.get("prompt") or ""))
@@ -213,16 +223,16 @@ class Hub:
             raise ValueError(f"Không phải thư mục: {value}")
         return path
 
-    def inventory(self, msg: dict) -> list[dict]:
+    def inventory(self, msg: dict) -> dict:
         folder = self._folder(msg.get("folder"))
         edit = folder / "edit"
-        rows = []
+        videos = []
         for video in list_videos(folder):
             duration = probe_duration(video)
             poster = edit / "storyboard" / f"src_{video.stem}.jpg"
             if not poster.is_file():
                 self._still(video, min(1.0, (duration or 0) / 2), poster)
-            rows.append({
+            videos.append({
                 "name": video.name,
                 "path": str(video.resolve()),
                 "size": video.stat().st_size,
@@ -230,7 +240,38 @@ class Hub:
                 "duration": duration,
                 "poster": str(poster) if poster.is_file() else None,
             })
-        return rows
+        images = []
+        for image in list_assets(folder)[KIND_IMAGE]:
+            size = _image_size(image)
+            images.append({
+                "name": image.name,
+                "path": str(image.resolve()),
+                "size": image.stat().st_size,
+                "width": size[0] if size else None,
+                "height": size[1] if size else None,
+            })
+        audio = []
+        for track in list_assets(folder)[KIND_AUDIO]:
+            audio.append({
+                "name": track.name,
+                "path": str(track.resolve()),
+                "size": track.stat().st_size,
+                "duration": probe_duration(track),
+            })
+        docs = []
+        for doc in list_assets(folder)[KIND_DOC]:
+            preview = ""
+            try:
+                preview = doc.read_text(encoding="utf-8", errors="replace")[:200].strip()
+            except OSError:
+                pass
+            docs.append({
+                "name": doc.name,
+                "path": str(doc.resolve()),
+                "size": doc.stat().st_size,
+                "preview": preview,
+            })
+        return {"videos": videos, "images": images, "audio": audio, "docs": docs}
 
     def _ffmpeg(self, args: list[str], lines: list[str]) -> int:
         argv = ["ffmpeg", "-nostdin", "-y", "-loglevel", "error", *args]
@@ -244,6 +285,14 @@ class Hub:
         dest.parent.mkdir(parents=True, exist_ok=True)
         code = self._ffmpeg(
             ["-ss", f"{at:.3f}", "-i", str(source), "-frames:v", "1", "-vf", "scale=-2:540", str(dest)],
+            [],
+        )
+        return code == 0 and dest.is_file()
+
+    def _still_image(self, source: Path, dest: Path) -> bool:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        code = self._ffmpeg(
+            ["-i", str(source), "-frames:v", "1", "-vf", "scale=-2:540", str(dest)],
             [],
         )
         return code == 0 and dest.is_file()
@@ -295,8 +344,10 @@ class Hub:
         req_id = msg.get("id")
         folder = self._folder(msg.get("folder"))
         videos = list_videos(folder)
-        if not videos:
-            self._result(req_id, False, error="Không có footage trong folder.")
+        assets = list_assets(folder)
+        extras = assets[KIND_IMAGE] + assets[KIND_AUDIO] + assets[KIND_DOC]
+        if not videos and not extras:
+            self._result(req_id, False, error="Không có footage, ảnh, âm thanh hay kịch bản trong folder.")
             return
         edit = folder / "edit"
         pending = [video for video in videos if not transcript_file(edit, video).is_file()]
@@ -309,41 +360,56 @@ class Hub:
             )
             return
 
-        stop = threading.Event()
-
-        def poll() -> None:
-            total = len(videos)
-            while not stop.is_set():
-                done = sum(1 for video in videos if transcript_file(edit, video).is_file())
-                self._progress(req_id, "transcribe", done, total)
-                stop.wait(0.4)
-
-        poller = threading.Thread(target=poll, daemon=True)
-        poller.start()
         lines: list[str] = []
-        env = os.environ.copy()
-        if api_key:
-            env["ELEVENLABS_API_KEY"] = api_key
-        try:
+        if videos:
+            stop = threading.Event()
+
+            def poll() -> None:
+                total = len(videos)
+                while not stop.is_set():
+                    done = sum(1 for video in videos if transcript_file(edit, video).is_file())
+                    self._progress(req_id, "transcribe", done, total)
+                    stop.wait(0.4)
+
+            poller = threading.Thread(target=poll, daemon=True)
+            poller.start()
+            env = os.environ.copy()
+            if api_key:
+                env["ELEVENLABS_API_KEY"] = api_key
+            try:
+                code = self.spawn(
+                    [sys.executable, str(HELPERS / "transcribe_batch.py"), str(folder)],
+                    cwd=folder,
+                    env=env,
+                    on_line=lambda line: self._collect(req_id, lines, line),
+                )
+            finally:
+                stop.set()
+                poller.join(timeout=1)
+            if self.cancel_event.is_set():
+                self._result(req_id, False, error="đã hủy")
+                return
+            if code != 0:
+                self._result(req_id, False, error=_tail(lines) or f"transcribe thoát {code}")
+                return
+
+            self._progress(req_id, "pack", 0, 1)
             code = self.spawn(
-                [sys.executable, str(HELPERS / "transcribe_batch.py"), str(folder)],
+                [sys.executable, str(HELPERS / "pack_transcripts.py"), "--edit-dir", str(edit)],
                 cwd=folder,
-                env=env,
+                env=agent_env(os.environ),
                 on_line=lambda line: self._collect(req_id, lines, line),
             )
-        finally:
-            stop.set()
-            poller.join(timeout=1)
-        if self.cancel_event.is_set():
-            self._result(req_id, False, error="đã hủy")
-            return
-        if code != 0:
-            self._result(req_id, False, error=_tail(lines) or f"transcribe thoát {code}")
-            return
+            if self.cancel_event.is_set():
+                self._result(req_id, False, error="đã hủy")
+                return
+            if code != 0:
+                self._result(req_id, False, error=_tail(lines) or f"pack thoát {code}")
+                return
 
-        self._progress(req_id, "pack", 0, 1)
+        # Manifest cho ảnh/audio/docs — agent đọc trước mỗi turn.
         code = self.spawn(
-            [sys.executable, str(HELPERS / "pack_transcripts.py"), "--edit-dir", str(edit)],
+            [sys.executable, str(HELPERS / "pack_assets.py"), str(folder), "--edit-dir", str(edit)],
             cwd=folder,
             env=agent_env(os.environ),
             on_line=lambda line: self._collect(req_id, lines, line),
@@ -352,15 +418,17 @@ class Hub:
             self._result(req_id, False, error="đã hủy")
             return
         if code != 0:
-            self._result(req_id, False, error=_tail(lines) or f"pack thoát {code}")
+            self._result(req_id, False, error=_tail(lines) or f"pack assets thoát {code}")
             return
         self._progress(req_id, "pack", 1, 1)
         cached = len(videos) - len(pending)
         self._result(req_id, True, data={
             "videos": len(videos),
+            "extras": len(extras),
             "cached": cached,
             "transcribed": len(pending),
-            "packed": str(edit / "takes_packed.md"),
+            "packed": str(edit / "takes_packed.md") if videos else None,
+            "assets": str(edit / "assets.md"),
         })
 
     def approve(self, msg: dict) -> None:
@@ -379,8 +447,8 @@ class Hub:
         if not brief.is_file() or not brief.read_text(encoding="utf-8").strip():
             self._result(req_id, False, error="Chưa có prompt. Viết brief trước khi gọi agent.")
             return
-        if not (folder / "edit" / "takes_packed.md").is_file():
-            self._result(req_id, False, error="Chưa có takes_packed.md. Chạy transcribe trước.")
+        if not (folder / "edit" / "takes_packed.md").is_file() and not (folder / "edit" / "assets.md").is_file():
+            self._result(req_id, False, error="Chưa có transcript hay manifest. Chạy phân tích nguồn trước.")
             return
 
         state = load_state(folder)
@@ -508,12 +576,18 @@ class Hub:
                 duration = probe_duration(path)
                 if duration is not None:
                     durations[str(key)] = duration
+        source_kinds: dict[str, str] = {}
+        for key, raw in sources.items():
+            path = _source_path(edit, raw)
+            kind = asset_kind(path) if path.is_file() else None
+            source_kinds[str(key)] = kind or KIND_VIDEO
         state = load_state(folder)
         return {
             "edl": edl,
             "validation": validation.to_dict(),
             "words": words,
             "durations": durations,
+            "source_kinds": source_kinds,
             "strategy": state.get("strategy") or "",
             "preview_ready": (edit / "preview.mp4").is_file(),
         }
@@ -564,28 +638,63 @@ class Hub:
             end = float(raw.get("end") or 0)
             item = {"index": index, "source": raw.get("source"), "start": start, "end": end, "clip": None, "poster": None}
             raw_source = sources.get(raw.get("source"))
+            effect = raw.get("effect") if isinstance(raw.get("effect"), str) else None
             if raw_source:
                 source = _source_path(edit, raw_source)
-                stem = f"clip_{_clip_hash(source, start, end)}"
+                stem = f"clip_{_clip_hash(source, start, end, effect)}"
                 clip = out_dir / f"{stem}.mp4"
                 poster = out_dir / f"{stem}.jpg"
                 keep.update({clip.name, poster.name})
-                if not poster.is_file():
-                    self._still(source, start, poster)
-                if not clip.is_file() and end > start:
-                    lines: list[str] = []
-                    part = out_dir / f"{stem}.part.mp4"
-                    code = self._ffmpeg([
-                        "-ss", f"{start:.3f}", "-t", f"{end - start:.3f}", "-i", str(source),
-                        "-map", "0:v:0", "-map", "0:a:0?", "-vf", "scale=-2:540",
-                        "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-pix_fmt", "yuv420p",
-                        "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(part),
-                    ], lines)
-                    if code == 0 and part.is_file():
-                        part.replace(clip)
-                    else:
-                        part.unlink(missing_ok=True)
-                        failures.append(f"cảnh {index + 1}: {_tail(lines) or f'ffmpeg thoát {code}'}")
+                kind = asset_kind(source)
+                if kind == KIND_IMAGE:
+                    if not poster.is_file():
+                        self._still_image(source, poster)
+                    if not clip.is_file() and end > start:
+                        # Proxy carries the same zoompan motion the final render
+                        # will apply — the storyboard stays honest.
+                        size = _image_size(source)
+                        cw, ch = (960, 540) if not size or size[0] >= size[1] else (540, 960)
+                        proxy_frames = int(round((end - start) * 24))
+                        try:
+                            vf = _render_helper().image_effect_filter(
+                                effect or "zoom_in", cw, ch, proxy_frames, 24.0)
+                        except Exception:
+                            vf = f"zoompan=z='1.0':d=1:s={cw}x{ch}"
+                        lines: list[str] = []
+                        part = out_dir / f"{stem}.part.mp4"
+                        code = self._ffmpeg([
+                            "-loop", "1", "-t", f"{end - start:.3f}", "-i", str(source),
+                            "-f", "lavfi", "-t", f"{end - start:.3f}",
+                            "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+                            "-vf", f"scale={cw * 2}:{ch * 2}:force_original_aspect_ratio=increase,crop={cw * 2}:{ch * 2},{vf}:d={int(round((end - start) * 24))}:fps=24,format=yuv420p",
+                            "-map", "0:v:0", "-map", "1:a:0",
+                            "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-pix_fmt", "yuv420p",
+                            "-r", "24", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+                            "-t", f"{end - start:.3f}",
+                            "-shortest", str(part),
+                        ], lines)
+                        if code == 0 and part.is_file():
+                            part.replace(clip)
+                        else:
+                            part.unlink(missing_ok=True)
+                            failures.append(f"cảnh {index + 1}: {_tail(lines) or f'ffmpeg thoát {code}'}")
+                else:
+                    if not poster.is_file():
+                        self._still(source, start, poster)
+                    if not clip.is_file() and end > start:
+                        lines = []
+                        part = out_dir / f"{stem}.part.mp4"
+                        code = self._ffmpeg([
+                            "-ss", f"{start:.3f}", "-t", f"{end - start:.3f}", "-i", str(source),
+                            "-map", "0:v:0", "-map", "0:a:0?", "-vf", "scale=-2:540",
+                            "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-pix_fmt", "yuv420p",
+                            "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(part),
+                        ], lines)
+                        if code == 0 and part.is_file():
+                            part.replace(clip)
+                        else:
+                            part.unlink(missing_ok=True)
+                            failures.append(f"cảnh {index + 1}: {_tail(lines) or f'ffmpeg thoát {code}'}")
                 item["clip"] = str(clip) if clip.is_file() else None
                 item["poster"] = str(poster) if poster.is_file() else None
             items.append(item)
@@ -662,8 +771,21 @@ def _source_path(edit: Path, raw) -> Path:
     return path if path.is_absolute() else (edit / path).resolve()
 
 
-def _clip_hash(source: Path, start: float, end: float) -> str:
-    return hashlib.sha1(f"{source}|{start:.3f}|{end:.3f}".encode()).hexdigest()[:12]
+def _clip_hash(source: Path, start: float, end: float, effect: str | None = None) -> str:
+    return hashlib.sha1(f"{source}|{start:.3f}|{end:.3f}|{effect or ''}".encode()).hexdigest()[:12]
+
+
+def _image_size(path: Path) -> tuple[int, int] | None:
+    argv = [
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", str(path),
+    ]
+    try:
+        out = subprocess.run(argv, capture_output=True, text=True, timeout=10).stdout.strip()
+        w, h = out.split("x")
+        return int(w), int(h)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
 
 
 def _clean_ranges(raw) -> list[dict]:
@@ -682,6 +804,19 @@ def _clean_ranges(raw) -> list[dict]:
         for key in ("beat", "quote", "reason"):
             if isinstance(item.get(key), str):
                 row[key] = item[key]
+        if isinstance(item.get("effect"), str):
+            row["effect"] = item["effect"]
+        if isinstance(item.get("grade"), str):
+            row["grade"] = item["grade"]
+        transition = item.get("transition_in")
+        if isinstance(transition, dict):
+            ttype = transition.get("type")
+            try:
+                tdur = float(transition.get("duration_s"))
+            except (TypeError, ValueError):
+                tdur = None
+            if isinstance(ttype, str) and tdur is not None:
+                row["transition_in"] = {"type": ttype, "duration_s": tdur}
         clean.append(row)
     return clean
 

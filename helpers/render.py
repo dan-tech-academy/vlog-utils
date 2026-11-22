@@ -1,12 +1,16 @@
-"""Render a video from an EDL.
+"""Render a video from an EDL (version 1 or 2).
 
 Implements the HEURISTICS render pipeline in the correct order:
 
-  1. Per-segment extract with color grade + 30ms audio fades baked in
-  2. Lossless -c copy concat into base.mp4
+  1. Per-segment extract with color grade + 30ms audio fades baked in.
+     Image sources become Ken Burns / pan segments on the shared canvas.
+  2. Segment assembly into base.mp4: lossless `-c copy` concat when every
+     cut is hard, otherwise an xfade + acrossfade chain for transitions.
   3. If overlays or subtitles: single filter graph that overlays animations
      (with PTS shift so frame 0 lands at the overlay window start)
      and applies `subtitles` filter LAST → final.mp4
+  4. Optional `audio` block: music bed + SFX hits mixed under the voice.
+  5. Loudness normalization to -14 LUFS / -1 dBTP.
 
 Optionally builds a master SRT from the per-source transcripts + EDL
 output-timeline offsets, applies the proven force_style (2-word
@@ -91,6 +95,146 @@ def resolve_path(maybe_path: str, base: Path) -> Path:
     if p.is_absolute():
         return p
     return (base / p).resolve()
+
+
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
+AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".opus"}
+
+
+def source_kind(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix in IMAGE_EXTS:
+        return "image"
+    if suffix in AUDIO_EXTS:
+        return "audio"
+    return "video"
+
+
+def probe_image_size(path: Path) -> tuple[int, int] | None:
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height",
+             "-of", "json", str(path)],
+            capture_output=True, text=True, check=True,
+        )
+        streams = json.loads(out.stdout).get("streams") or []
+        if streams:
+            return int(streams[0]["width"]), int(streams[0]["height"])
+    except (subprocess.CalledProcessError, json.JSONDecodeError, OSError, KeyError, TypeError, ValueError):
+        pass
+    return None
+
+
+# -------- Effects ------------------------------------------------------------
+#
+# EDL v2 per-range `effect` field. Whitelisted so agents cannot emit arbitrary
+# filter chains; every effect lands on the shared canvas at the same size.
+
+EFFECTS = {"static", "zoom_in", "zoom_out", "pan_left", "pan_right", "punch_in"}
+
+TRANSITIONS = {
+    "fade", "dissolve", "wipeleft", "wiperight", "wipeup", "wipedown",
+    "slideleft", "slideright", "slideup", "slidedown",
+    "circleopen", "circleclose", "fadeblack", "fadewhite",
+}
+
+# Depth of the zoom, shared by both implementations so cards and final agree.
+ZOOM_DEPTH = 1.35
+
+
+def video_effect_filter(effect: str | None, duration: float, w: int, h: int,
+                        fps: float = 25.0) -> str:
+    """Animated zoom/pan for video via zoompan: crop sizes are evaluated once at
+    init, so crop cannot animate — zoompan re-evaluates per output frame.
+    The caller must pre-scale the input to ≥ ZOOM_DEPTH× the output canvas."""
+    if not effect or effect == "static":
+        return ""
+    frames = max(1, int(round(duration * fps)))
+    k = ZOOM_DEPTH - 1.0
+    n = max(1, frames - 1)  # on goes 0..frames-1
+    if effect == "zoom_in":
+        z = f"min(1+{k:.2f}*on/{n},{ZOOM_DEPTH})"
+    elif effect == "zoom_out":
+        z = f"max({ZOOM_DEPTH}-{k:.2f}*on/{n},1)"
+    elif effect == "punch_in":
+        z = f"min(1+{2 * k:.2f}*on/{n},{ZOOM_DEPTH})"
+    elif effect in ("pan_left", "pan_right"):
+        z = f"{ZOOM_DEPTH}"
+    else:
+        return ""
+    if effect == "pan_left":
+        x = f"(iw-ow)*min(on/{n},1)"
+    elif effect == "pan_right":
+        x = f"(iw-ow)*(1-min(on/{n},1))"
+    else:
+        x = "(iw-ow)/2"
+    return (
+        f"zoompan=z='{z}':x='{x}':y='(ih-oh)/2'"
+        f":d=1:s={w}x{h}:fps={fps:g}"
+    )
+
+
+def image_effect_filter(effect: str | None, w: int, h: int, frames: int = 1, fps: float = 25.0) -> str:
+    """zoompan expression for a still: input is pre-scaled to 2× the canvas.
+
+    `d`/`fps` are not usable inside zoompan expressions, so the frame count and
+    rate are baked into each expression as constants. `static` still routes
+    through zoompan (z=1) so a lone input frame expands to `frames` outputs.
+    """
+    d = max(frames, 1)
+    cx = "'iw/2-(iw/zoom/2)'"
+    cy = "'ih/2-(ih/zoom/2)'"
+    if not effect or effect == "static":
+        return f"zoompan=z='1':x={cx}:y={cy}:s={w}x{h}"
+    if effect == "zoom_in":
+        return f"zoompan=z='min(1+{ZOOM_DEPTH - 1:.2f}*on/{d},{ZOOM_DEPTH})':x={cx}:y={cy}:s={w}x{h}"
+    if effect == "zoom_out":
+        return f"zoompan=z='max({ZOOM_DEPTH}-{ZOOM_DEPTH - 1:.2f}*on/{d},1)':x={cx}:y={cy}:s={w}x{h}"
+    if effect == "punch_in":
+        return f"zoompan=z='min(1+2.0*on/{fps:g},{ZOOM_DEPTH})':x={cx}:y={cy}:s={w}x{h}"
+    if effect == "pan_left":
+        return f"zoompan=z={ZOOM_DEPTH}:x='(iw-iw/zoom)*on/{d}':y={cy}:s={w}x{h}"
+    if effect == "pan_right":
+        return f"zoompan=z={ZOOM_DEPTH}:x='(iw-iw/zoom)*(1-on/{d})':y={cy}:s={w}x{h}"
+    return ""
+
+
+def target_canvas(edl: dict, edit_dir: Path) -> tuple[int, int]:
+    """One canvas for the whole render so xfade can blend adjacent segments.
+
+    Orientation comes from the first range's source: portrait → 1080×1920,
+    anything else → 1920×1080.
+    """
+    ranges = edl.get("ranges") or []
+    sources = edl.get("sources") or {}
+    portrait = False
+    if ranges:
+        raw = ranges[0].get("source")
+        if raw and sources.get(raw):
+            src = resolve_path(str(sources[raw]), edit_dir)
+            if source_kind(src) == "image":
+                size = probe_image_size(src)
+                portrait = bool(size and size[1] > size[0])
+            else:
+                portrait = is_portrait_source(src)
+    return (1080, 1920) if portrait else (1920, 1080)
+
+
+def transition_in(range_row: dict) -> dict | None:
+    raw = range_row.get("transition_in")
+    if not isinstance(raw, dict):
+        return None
+    ttype = str(raw.get("type") or "").lower()
+    if ttype in ("", "cut", "none") or ttype not in TRANSITIONS:
+        return None
+    try:
+        dur = float(raw.get("duration_s"))
+    except (TypeError, ValueError):
+        return None
+    if dur <= 0:
+        return None
+    return {"type": ttype, "duration_s": min(dur, 3.0)}
 
 
 def resolve_subtitles_path(maybe_path: str, edit_dir: Path) -> Path:
@@ -254,29 +398,54 @@ def extract_segment(
     preview: bool = False,
     draft: bool = False,
     rate: str | None = None,
+    canvas: tuple[int, int] | None = None,
+    effect: str | None = None,
 ) -> None:
     """Extract a cut range as its own MP4 with grade + 30ms audio fades baked in.
 
-    `-ss` before `-i` for fast accurate seeking. Scale to 1080p from 4K.
-    Portrait sources (height > width) are scaled by height to preserve orientation.
+    `-ss` before `-i` for fast accurate seeking. Every segment lands on the
+    shared `canvas` (scale + pad) so xfade can blend any pair; without a canvas
+    the old behavior is kept — 1080p landscape, or height-locked for portrait
+    sources.
 
     Quality ladder:
-      - final (default): 1080p libx264 fast CRF 20
-      - preview:         1080p libx264 medium CRF 22 (evaluable for QC)
+      - final (default): canvas-size libx264 fast CRF 20
+      - preview:         canvas-size libx264 medium CRF 22 (evaluable for QC)
       - draft:           720p libx264 ultrafast CRF 28 (cut-point check only)
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    portrait = is_portrait_source(source)
-    if draft:
-        scale = "scale=-2:1280" if portrait else "scale=1280:-2"
+    if canvas is not None:
+        w, h = canvas
+        scale = (
+            f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1"
+        )
     else:
-        scale = "scale=-2:1920" if portrait else "scale=1920:-2"
+        portrait = is_portrait_source(source)
+        if draft:
+            scale = "scale=-2:1280" if portrait else "scale=1280:-2"
+        else:
+            scale = "scale=-2:1920" if portrait else "scale=1920:-2"
+
+    out_rate = rate if rate is not None else (probe_source_fps(source) or "24")
 
     vf_parts: list[str] = []
     if is_hdr_source(source):
         vf_parts.append(TONEMAP_CHAIN)
-    vf_parts.append(scale)
+    if canvas is not None and video_effect_filter(effect, duration, *canvas,
+                                                 fps=float(Fraction(out_rate))):
+        # zoompan needs headroom above the canvas to move inside; cover-scale to
+        # ZOOM_DEPTH× then animate the window.
+        zw = int(w * ZOOM_DEPTH)
+        zh = int(h * ZOOM_DEPTH)
+        vf_parts.append(
+            f"scale={zw}:{zh}:force_original_aspect_ratio=increase,"
+            f"crop={zw}:{zh},fps={Fraction(out_rate)},"
+            f"{video_effect_filter(effect, duration, w, h, fps=float(Fraction(out_rate)))}"
+        )
+    else:
+        vf_parts.append(scale)
     if grade_filter:
         vf_parts.append(grade_filter)
     vf = ",".join(vf_parts)
@@ -292,12 +461,6 @@ def extract_segment(
     else:
         preset, crf = "fast", "20"
 
-    # Frame rate: use the rate the caller resolved once for the whole render
-    # (every segment must share it — concat -c copy in Rule 2 requires a uniform
-    # frame rate). When called standalone with no rate, preserve this source's
-    # own rate; fall back to 24 only if it can't be probed.
-    out_rate = rate if rate is not None else (probe_source_fps(source) or "24")
-
     cmd = [
         "ffmpeg", "-y",
         "-ss", f"{seg_start:.3f}",
@@ -307,8 +470,65 @@ def extract_segment(
         "-af", af,
         "-c:v", "libx264", "-preset", preset, "-crf", crf,
         "-pix_fmt", "yuv420p", "-r", out_rate,
-        "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
         "-movflags", "+faststart",
+        str(out_path),
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+
+def extract_image_segment(
+    image: Path,
+    duration: float,
+    grade_filter: str,
+    effect: str | None,
+    out_path: Path,
+    canvas: tuple[int, int],
+    rate: str,
+    preview: bool = False,
+    draft: bool = False,
+) -> None:
+    """Turn a still into a segment: cover-scale, Ken Burns via zoompan, silent audio.
+
+    zoompan needs the input larger than the canvas, so the image is cover-scaled
+    to 2× the canvas first. A silent stereo track keeps the uniform audio layout
+    the concat and acrossfade assembly rely on.
+    """
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    w, h = canvas
+    fps = float(Fraction(rate))
+    frames = max(1, int(round(duration * fps)))
+
+    vf_parts: list[str] = [
+        f"scale={w * 2}:{h * 2}:force_original_aspect_ratio=increase",
+        f"crop={w * 2}:{h * 2}",
+    ]
+    motion = image_effect_filter(effect, w, h, frames, fps)
+    vf_parts.append(f"{motion}:d={frames}:fps={fps:g}")
+    if grade_filter:
+        vf_parts.append(grade_filter)
+    vf_parts.append("format=yuv420p")
+    vf = ",".join(vf_parts)
+
+    if draft:
+        preset, crf = "ultrafast", "28"
+    elif preview:
+        preset, crf = "medium", "22"
+    else:
+        preset, crf = "fast", "20"
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(image),
+        "-f", "lavfi", "-t", f"{duration:.3f}",
+        "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+        "-vf", vf,
+        "-t", f"{duration:.3f}",
+        "-c:v", "libx264", "-preset", preset, "-crf", crf,
+        "-pix_fmt", "yuv420p", "-r", rate,
+        "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+        "-movflags", "+faststart",
+        "-shortest",
         str(out_path),
     ]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -351,9 +571,12 @@ def extract_all_segments(
     else:
         out_rate = "24"
 
+    canvas = target_canvas(edl, edit_dir)
+
     seg_paths: list[Path] = []
     print(f"extracting {len(ranges)} segment(s) → {clips_dir.name}/  @ {out_rate} fps"
-          f"{' (forced)' if fps is not None else ' (from source)'}")
+          f"{' (forced)' if fps is not None else ' (from source)'}"
+          f"  canvas {canvas[0]}×{canvas[1]}")
     if is_auto:
         print("  (auto-grade per segment: analyzing each range)")
     for i, r in enumerate(ranges):
@@ -363,17 +586,35 @@ def extract_all_segments(
         end = float(r["end"])
         duration = end - start
         out_path = clips_dir / f"seg_{i:02d}_{src_name}.mp4"
+        kind = source_kind(src_path)
+        effect = r.get("effect") if isinstance(r.get("effect"), str) else None
+        seg_grade = r.get("grade") if isinstance(r.get("grade"), str) else None
 
-        if is_auto:
+        if is_auto and kind == "video":
             seg_filter, _stats = auto_grade_for_clip(src_path, start=start, duration=duration, verbose=False)
+        elif seg_grade:
+            seg_filter = resolve_grade_filter(seg_grade)
         else:
             seg_filter = resolved
+        if seg_filter == "__AUTO__":
+            seg_filter = ""
 
         note = r.get("beat") or r.get("note") or ""
-        print(f"  [{i:02d}] {src_name}  {start:7.2f}-{end:7.2f}  ({duration:5.2f}s)  {note}")
+        print(f"  [{i:02d}] {src_name}  {start:7.2f}-{end:7.2f}  ({duration:5.2f}s)  {note}"
+              + (f"  [{kind}:{effect}]" if kind != "video" or effect else ""))
         if is_auto:
             print(f"        grade: {seg_filter or '(none)'}")
-        extract_segment(src_path, start, duration, seg_filter, out_path, preview=preview, draft=draft, rate=out_rate)
+        if kind == "image":
+            extract_image_segment(
+                src_path, duration, seg_filter, effect, out_path,
+                canvas=canvas, rate=out_rate, preview=preview, draft=draft,
+            )
+        else:
+            extract_segment(
+                src_path, start, duration, seg_filter, out_path,
+                preview=preview, draft=draft, rate=out_rate,
+                canvas=canvas, effect=effect,
+            )
         seg_paths.append(out_path)
 
     return seg_paths
@@ -399,6 +640,183 @@ def concat_segments(segment_paths: list[Path], out_path: Path, edit_dir: Path) -
     print(f"concat → {out_path.name}")
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     concat_list.unlink(missing_ok=True)
+
+
+def output_duration(ranges: list[dict]) -> float:
+    """Timeline length after transitions overlap adjacent segments."""
+    total = 0.0
+    for index, r in enumerate(ranges):
+        dur = float(r["end"]) - float(r["start"])
+        if index > 0:
+            trans = transition_in(r)
+            if trans:
+                dur -= trans["duration_s"]
+        total += max(dur, 0.0)
+    return total
+
+
+def assemble_segments(
+    segment_paths: list[Path],
+    ranges: list[dict],
+    out_path: Path,
+    edit_dir: Path,
+    *,
+    preview: bool = False,
+) -> None:
+    """Join segments into base.mp4.
+
+    All hard cuts → lossless concat. Any `transition_in` on a range switches the
+    whole assembly to one xfade (video) + acrossfade (audio) filter pass.
+    """
+    transitions = [transition_in(r) for r in ranges]
+    if not any(transitions):
+        concat_segments(segment_paths, out_path, edit_dir)
+        return
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    inputs: list[str] = []
+    for path in segment_paths:
+        inputs += ["-i", str(path)]
+
+    # xfade/concat require matching timebases; normalize every input to AVTB.
+    filter_parts: list[str] = []
+    for i in range(len(segment_paths)):
+        filter_parts.append(f"[{i}:v]settb=AVTB[vin{i}]")
+        filter_parts.append(f"[{i}:a]asettb=AVTB[ain{i}]")
+    vlabel = "vin0"
+    alabel = "ain0"
+    # The timeline point where each transition starts is the accumulated output
+    # length minus the transition's own overlap.
+    accumulated = float(ranges[0]["end"]) - float(ranges[0]["start"]) if ranges else 0.0
+    for k in range(1, len(segment_paths)):
+        trans = transitions[k]
+        dur_k = float(ranges[k]["end"]) - float(ranges[k]["start"])
+        if not trans:
+            # Hard cut between blended sections: concatenate via zero-second xfade
+            # equivalent — just chain a cut with a minimal fade-free jump.
+            filter_parts.append(f"[{vlabel}][vin{k}]concat=n=2:v=1:a=0[v{k}]")
+            filter_parts.append(f"[{alabel}][ain{k}]concat=n=2:v=0:a=1[a{k}]")
+            accumulated += dur_k
+        else:
+            d = trans["duration_s"]
+            offset = accumulated - d
+            filter_parts.append(
+                f"[{vlabel}][vin{k}]xfade=transition={trans['type']}:duration={d:.3f}:offset={offset:.3f}[v{k}]"
+            )
+            filter_parts.append(f"[{alabel}][ain{k}]acrossfade=d={d:.3f}:o=1[a{k}]")
+            accumulated = offset + dur_k
+        vlabel = f"v{k}"
+        alabel = f"a{k}"
+
+    preset, crf = ("medium", "22") if preview else ("fast", "20")
+    cmd = [
+        "ffmpeg", "-y",
+        *inputs,
+        "-filter_complex", ";".join(filter_parts),
+        "-map", f"[{vlabel}]", "-map", f"[{alabel}]",
+        "-c:v", "libx264", "-preset", preset, "-crf", crf,
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+        "-movflags", "+faststart",
+        str(out_path),
+    ]
+    print(f"assemble ({len(segment_paths)} segs, transitions) → {out_path.name}")
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+
+# -------- Music bed + SFX mix -------------------------------------------------
+
+
+def mix_audio(
+    base_path: Path,
+    audio_spec: dict,
+    total_duration: float,
+    out_path: Path,
+    edit_dir: Path,
+) -> None:
+    """Mix a music bed and timed SFX hits under the video's own audio.
+
+    `audio_spec` is the EDL `audio` block: `music: {source, volume, fade_in_s,
+    fade_out_s}` and `sfx: [{source, at_s, volume}]`. Output keeps the base
+    video stream untouched (copy) and rebuilds only the audio track.
+    """
+    sources = audio_spec.get("sources") or {}
+    music = audio_spec.get("music")
+    sfx = audio_spec.get("sfx") or []
+
+    inputs: list[str] = ["-i", str(base_path)]
+
+    def _audio_path(key) -> Path | None:
+        if not isinstance(key, str):
+            return None
+        raw = sources.get(key, key)
+        path = resolve_path(str(raw), edit_dir)
+        return path if path.is_file() else None
+
+    music_path: Path | None = None
+    if isinstance(music, dict) and music.get("source"):
+        music_path = _audio_path(music["source"])
+        if music_path is None:
+            print(f"  music source {music['source']} không tìm thấy, bỏ qua")
+        else:
+            inputs += ["-i", str(music_path)]
+    sfx_paths: list[Path] = []
+    sfx_items: list[dict] = []
+    for item in sfx:
+        if not isinstance(item, dict) or not item.get("source"):
+            continue
+        path = _audio_path(item["source"])
+        if path is None:
+            print(f"  sfx source {item['source']} không tìm thấy, bỏ qua")
+            continue
+        sfx_paths.append(path)
+        sfx_items.append(item)
+        inputs += ["-i", str(path)]
+
+    filter_parts: list[str] = ["[0:a]anull[base]"]
+    mix_labels: list[str] = ["[base]"]
+
+    if music_path is not None:
+        volume = min(max(float(music.get("volume", 0.25)), 0.0), 1.0)
+        fade_in = max(float(music.get("fade_in_s", 0.5)), 0.0)
+        fade_out = max(float(music.get("fade_out_s", 2.0)), 0.0)
+        fade_out_start = max(0.0, total_duration - fade_out)
+        # Loop the bed until the video ends, then trim exactly to length.
+        filter_parts.append(
+            f"[1:a]aloop=loop=-1:size=2147483647,atrim=duration={total_duration:.3f},"
+            f"volume={volume:.3f},afade=t=in:st=0:d={fade_in:.3f},"
+            f"afade=t=out:st={fade_out_start:.3f}:d={fade_out:.3f}[mus]"
+        )
+        mix_labels.append("[mus]")
+
+    for i, item in enumerate(sfx_items):
+        at = max(float(item.get("at_s", 0.0)), 0.0)
+        volume = min(max(float(item.get("volume", 0.8)), 0.0), 1.0)
+        delay_ms = int(round(at * 1000))
+        input_index = (2 if music_path is not None else 1) + i
+        filter_parts.append(
+            f"[{input_index}:a]adelay={delay_ms}|{delay_ms},volume={volume:.3f}[fx{i}]"
+        )
+        mix_labels.append(f"[fx{i}]")
+
+    n = len(mix_labels)
+    filter_parts.append(
+        f"{''.join(mix_labels)}amix=inputs={n}:duration=first:normalize=0,"
+        f"alimiter=limit=0.95[aout]"
+    )
+
+    cmd = [
+        "ffmpeg", "-y",
+        *inputs,
+        "-filter_complex", ";".join(filter_parts),
+        "-map", "0:v", "-map", "[aout]",
+        "-c:v", "copy",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+        "-movflags", "+faststart",
+        str(out_path),
+    ]
+    print(f"mix audio (music: {'yes' if music_path else 'no'}, sfx: {len(sfx_paths)}) → {out_path.name}")
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
 
 # -------- Master SRT (Rule 5) ------------------------------------------------
@@ -478,7 +896,7 @@ def build_master_srt(edl: dict, edit_dir: Path, out_path: Path) -> None:
     entries: list[tuple[float, float, str]] = []
     seg_offset = 0.0
 
-    for r in edl["ranges"]:
+    for i, r in enumerate(edl["ranges"]):
         src_name = r["source"]
         seg_start = float(r["start"])
         seg_end = float(r["end"])
@@ -486,28 +904,32 @@ def build_master_srt(edl: dict, edit_dir: Path, out_path: Path) -> None:
 
         tr_path = transcripts_dir / f"{src_name}.json"
         if not tr_path.exists():
-            print(f"  no transcript for {src_name}, skipping captions for this segment")
-            seg_offset += seg_duration
-            continue
+            if source_kind(resolve_path(sources[src_name], edit_dir)) != "image":
+                print(f"  no transcript for {src_name}, skipping captions for this segment")
+        else:
+            transcript = json.loads(tr_path.read_text())
+            words_in_seg = _words_in_range(transcript, seg_start, seg_end)
 
-        transcript = json.loads(tr_path.read_text())
-        words_in_seg = _words_in_range(transcript, seg_start, seg_end)
+            for chunk in chunk_words(words_in_seg):
+                local_start = max(seg_start, chunk[0].get("start", seg_start))
+                local_end = min(seg_end, chunk[-1].get("end", seg_end))
+                out_start = max(0.0, local_start - seg_start) + seg_offset
+                out_end = max(0.0, local_end - seg_start) + seg_offset
+                if out_end <= out_start:
+                    out_end = out_start + 0.4
+                text = " ".join((w.get("text") or "").strip() for w in chunk)
+                text = re.sub(r"\s+", " ", text).strip()
+                # Strip trailing punctuation for cleaner uppercase look
+                text = text.rstrip(",;:")
+                text = text.upper()
+                entries.append((out_start, out_end, text))
 
-        for chunk in chunk_words(words_in_seg):
-            local_start = max(seg_start, chunk[0].get("start", seg_start))
-            local_end = min(seg_end, chunk[-1].get("end", seg_end))
-            out_start = max(0.0, local_start - seg_start) + seg_offset
-            out_end = max(0.0, local_end - seg_start) + seg_offset
-            if out_end <= out_start:
-                out_end = out_start + 0.4
-            text = " ".join((w.get("text") or "").strip() for w in chunk)
-            text = re.sub(r"\s+", " ", text).strip()
-            # Strip trailing punctuation for cleaner uppercase look
-            text = text.rstrip(",;:")
-            text = text.upper()
-            entries.append((out_start, out_end, text))
-
-        seg_offset += seg_duration
+        # The next scene's transition overlaps the tail of this one, shifting
+        # every later cue earlier on the output timeline.
+        next_trans = None
+        if i + 1 < len(edl["ranges"]):
+            next_trans = transition_in(edl["ranges"][i + 1])
+        seg_offset += seg_duration - (next_trans["duration_s"] if next_trans else 0.0)
 
     # Sort and write as SRT
     entries.sort(key=lambda e: e[0])
@@ -604,6 +1026,14 @@ def apply_loudnorm_two_pass(
     print(f"    measured: I={measurement['input_i']} LUFS  "
           f"TP={measurement['input_tp']}  LRA={measurement['input_lra']}")
 
+    # Pure silence measures -inf — loudnorm can't normalize it, so don't try.
+    if "-inf" in (str(measurement["input_i"]), str(measurement["input_tp"])):
+        print("    silent track — copying audio as-is")
+        run(["ffmpeg", "-y", "-i", str(input_path), "-c:v", "copy",
+             "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+             "-movflags", "+faststart", str(output_path)], quiet=True)
+        return True
+
     filter_str = (
         f"loudnorm=I={LOUDNORM_I}:TP={LOUDNORM_TP}:LRA={LOUDNORM_LRA}"
         f":measured_I={measurement['input_i']}"
@@ -642,7 +1072,11 @@ def build_final_composite(
     If there are no overlays and no subtitles, just copy base to out.
     """
     has_overlays = bool(overlays)
-    has_subs = subtitles_path is not None and subtitles_path.exists()
+    has_subs = (
+        subtitles_path is not None
+        and subtitles_path.exists()
+        and subtitles_path.stat().st_size > 0
+    )
 
     if not has_overlays and not has_subs:
         # Nothing to do — just rename/copy base to final name
@@ -761,7 +1195,7 @@ def main() -> None:
         edl, edit_dir, preview=args.preview, draft=args.draft, fps=args.fps
     )
 
-    # 2. Concat → base
+    # 2. Assemble → base (lossless concat for hard cuts, xfade for transitions)
     if args.draft:
         base_name = "base_draft.mp4"
     elif args.preview:
@@ -769,7 +1203,7 @@ def main() -> None:
     else:
         base_name = "base.mp4"
     base_path = edit_dir / base_name
-    concat_segments(segment_paths, base_path, edit_dir)
+    assemble_segments(segment_paths, edl["ranges"], base_path, edit_dir, preview=args.preview or args.draft)
 
     # 3. Subtitles: build if requested, resolve final path
     subs_path: Path | None = None
@@ -781,14 +1215,23 @@ def main() -> None:
             subs_path = resolve_subtitles_path(edl["subtitles"], edit_dir)
 
     # 4. Composite (overlays + subtitles LAST) → intermediate (pre-loudnorm) path
+    #    then fold in the optional music bed + SFX before loudness.
     overlays = edl.get("overlays") or []
+    audio_spec = edl.get("audio")
+    composite_path = base_path
+    if isinstance(audio_spec, dict) and (audio_spec.get("music") or audio_spec.get("sfx")):
+        mixed_path = edit_dir / "base_mixed.mp4"
+        total = output_duration(edl.get("ranges") or [])
+        audio_spec = {**audio_spec, "sources": edl.get("sources") or {}}
+        mix_audio(base_path, audio_spec, total, mixed_path, edit_dir)
+        composite_path = mixed_path
     if args.no_loudnorm:
         # Composite directly to final output
-        build_final_composite(base_path, overlays, subs_path, out_path, edit_dir)
+        build_final_composite(composite_path, overlays, subs_path, out_path, edit_dir)
     else:
         # Composite to a temp file, then run loudnorm → final output
         tmp_composite = out_path.with_suffix(".prenorm.mp4")
-        build_final_composite(base_path, overlays, subs_path, tmp_composite, edit_dir)
+        build_final_composite(composite_path, overlays, subs_path, tmp_composite, edit_dir)
         print("loudness normalization → social-ready (-14 LUFS / -1 dBTP / LRA 11)")
         apply_loudnorm_two_pass(tmp_composite, out_path, preview=args.draft)
         tmp_composite.unlink(missing_ok=True)

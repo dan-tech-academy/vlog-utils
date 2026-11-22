@@ -9,6 +9,7 @@ export type Play = { key: string; playing: boolean };
 type Props = {
   ranges: Range[];
   words: Words;
+  sourceKinds?: Record<string, string>;
   colorOf: (source: string) => string;
   clips: ClipMap;
   clipsRunning: boolean;
@@ -39,6 +40,7 @@ export function Storyboard(props: Props) {
             key={`${key}#${index}`}
             index={index}
             range={range}
+            kind={props.sourceKinds?.[range.source]}
             words={props.words}
             color={props.colorOf(range.source)}
             media={media}
