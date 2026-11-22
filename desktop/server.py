@@ -670,6 +670,7 @@ class Hub:
                             "-map", "0:v:0", "-map", "1:a:0",
                             "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-pix_fmt", "yuv420p",
                             "-r", "24", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+                            "-t", f"{end - start:.3f}",
                             "-shortest", str(part),
                         ], lines)
                         if code == 0 and part.is_file():
