@@ -441,7 +441,7 @@ def extract_segment(
         zh = int(h * ZOOM_DEPTH)
         vf_parts.append(
             f"scale={zw}:{zh}:force_original_aspect_ratio=increase,"
-            f"crop={zw}:{zh},"
+            f"crop={zw}:{zh},fps={Fraction(out_rate)},"
             f"{video_effect_filter(effect, duration, w, h, fps=float(Fraction(out_rate)))}"
         )
     else:
